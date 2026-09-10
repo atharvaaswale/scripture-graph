@@ -67,7 +67,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "hiddenness of God",
         "role of Guru"
       ],
-      "notes": null
+      "notes": null,
+      "x": 235,
+      "y": 391
     },
     {
       "id": "MS-178",
@@ -86,7 +88,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "blind faith",
         "inquiry vs belief"
       ],
-      "notes": null
+      "notes": null,
+      "x": -201,
+      "y": 43
     },
     {
       "id": "MS-189",
@@ -105,7 +109,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "moksha",
         "recognition of God"
       ],
-      "notes": null
+      "notes": null,
+      "x": 186,
+      "y": 93
     },
     {
       "id": "DB-5.1.40",
@@ -126,7 +132,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "Sadguru",
         "grace"
       ],
-      "notes": null
+      "notes": null,
+      "x": 408,
+      "y": 386
     },
     {
       "id": "DB-4.4.5",
@@ -147,7 +155,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "Sadguru",
         "discernment"
       ],
-      "notes": null
+      "notes": null,
+      "x": 45,
+      "y": 155
     },
     {
       "id": "DB-6.1.16",
@@ -168,7 +178,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "nature of Brahman",
         "indestructibility"
       ],
-      "notes": null
+      "notes": null,
+      "x": 51,
+      "y": -54
     },
     {
       "id": "DB-6.2.13",
@@ -189,7 +201,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "beyond name and form",
         "direct experience"
       ],
-      "notes": null
+      "notes": null,
+      "x": 190,
+      "y": -110
     },
     {
       "id": "BG-6.30",
@@ -207,7 +221,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 301,
+      "y": 15
     },
     {
       "id": "DB-5.1.13",
@@ -227,7 +243,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 270,
+      "y": 105
     },
     {
       "id": "BG-7.19",
@@ -247,7 +265,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 259,
+      "y": 236
     },
     {
       "id": "BG-2.23",
@@ -267,7 +287,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 103,
+      "y": 206
     },
     {
       "id": "BG-9.12",
@@ -285,7 +307,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 27,
+      "y": 289
     },
     {
       "id": "BG-9.11",
@@ -303,7 +327,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -96,
+      "y": 337
     },
     {
       "id": "DB-6.1.12",
@@ -320,7 +346,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -139,
+      "y": 184
     },
     {
       "id": "DB-6.1.21",
@@ -339,7 +367,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -247,
+      "y": 153
     },
     {
       "id": "DB-6.2.21",
@@ -358,7 +388,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -344,
+      "y": 64
     },
     {
       "id": "DB-6.2.27",
@@ -377,7 +409,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 197,
+      "y": 322
     },
     {
       "id": "DB-5.4.32",
@@ -396,7 +430,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -245,
+      "y": -179
     },
     {
       "id": "DB-5.2.9",
@@ -415,7 +451,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -405,
+      "y": -127
     },
     {
       "id": "DB-5.2.14",
@@ -434,7 +472,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -257,
+      "y": -335
     },
     {
       "id": "DB-5.2.22",
@@ -453,7 +493,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -347,
+      "y": -271
     },
     {
       "id": "DB-5.1.45",
@@ -472,7 +514,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": -124,
+      "y": -345
     },
     {
       "id": "DB-5.4.33",
@@ -491,7 +535,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 170,
+      "y": -155
     },
     {
       "id": "MS-150",
@@ -508,7 +554,9 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "en": null,
         "mr": null
       },
-      "notes": null
+      "notes": null,
+      "x": 397,
+      "y": 102
     }
   ],
   "edges": [
@@ -679,16 +727,16 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
   ],
   "node_positions": {
     "MS-178": {
-      "x": -140,
-      "y": -45,
-      "fx": -140,
-      "fy": -45
+      "x": -201,
+      "y": 43,
+      "fx": -201,
+      "fy": 43
     },
     "MS-179": {
-      "x": 404,
-      "y": 382,
-      "fx": 404,
-      "fy": 382
+      "x": 235,
+      "y": 391,
+      "fx": 235,
+      "fy": 391
     },
     "DB-6.1.16": {
       "x": 51,
@@ -697,16 +745,16 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
       "fy": -54
     },
     "MS-189": {
-      "x": 145,
-      "y": -20,
-      "fx": 145,
-      "fy": -20
+      "x": 186,
+      "y": 93,
+      "fx": 186,
+      "fy": 93
     },
     "DB-5.1.40": {
-      "x": 135,
-      "y": 95,
-      "fx": 135,
-      "fy": 95
+      "x": 408,
+      "y": 386,
+      "fx": 408,
+      "fy": 386
     },
     "DB-6.2.13": {
       "x": 190,
@@ -775,40 +823,40 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
       "fy": 64
     },
     "DB-6.2.27": {
-      "x": -226,
-      "y": -42,
-      "fx": -226,
-      "fy": -42
+      "x": 197,
+      "y": 322,
+      "fx": 197,
+      "fy": 322
     },
     "DB-5.4.32": {
-      "x": -349,
-      "y": -205,
-      "fx": -349,
-      "fy": -205
+      "x": -245,
+      "y": -179,
+      "fx": -245,
+      "fy": -179
     },
     "DB-5.2.9": {
-      "x": -211,
-      "y": -279,
-      "fx": -211,
-      "fy": -279
+      "x": -405,
+      "y": -127,
+      "fx": -405,
+      "fy": -127
     },
     "DB-5.2.14": {
-      "x": -63,
-      "y": -221,
-      "fx": -63,
-      "fy": -221
+      "x": -257,
+      "y": -335,
+      "fx": -257,
+      "fy": -335
     },
     "DB-5.2.22": {
-      "x": 27,
-      "y": -289,
-      "fx": 27,
-      "fy": -289
+      "x": -347,
+      "y": -271,
+      "fx": -347,
+      "fy": -271
     },
     "DB-5.1.45": {
-      "x": 156,
-      "y": -313,
-      "fx": 156,
-      "fy": -313
+      "x": -124,
+      "y": -345,
+      "fx": -124,
+      "fy": -345
     },
     "DB-5.4.33": {
       "x": 170,
@@ -817,10 +865,10 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
       "fy": -155
     },
     "MS-150": {
-      "x": 353,
-      "y": -67,
-      "fx": 353,
-      "fy": -67
+      "x": 397,
+      "y": 102,
+      "fx": 397,
+      "fy": 102
     }
   }
 };

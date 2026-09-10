@@ -67,12 +67,34 @@ function saveUniversalDatabase(data: any): void {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
+
+  // Ensure coordinates exist both on the verse itself and in node_positions
+  if (!data.node_positions) {
+    data.node_positions = {};
+  }
+  if (Array.isArray(data.verses)) {
+    data.verses.forEach((v: any) => {
+      const pos = data.node_positions[v.id];
+      if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+        v.x = Math.round(pos.x);
+        v.y = Math.round(pos.y);
+      } else if (typeof v.x === 'number' && typeof v.y === 'number') {
+        data.node_positions[v.id] = {
+          x: Math.round(v.x),
+          y: Math.round(v.y),
+          fx: Math.round(v.x),
+          fy: Math.round(v.y),
+        };
+      }
+    });
+  }
+
   const serialized = JSON.stringify(data, null, 2);
   fs.writeFileSync(UNIVERSAL_DB_FILE, serialized, 'utf-8');
   console.log(`[Universal DB] Saved ${data.verses?.length ?? 0} verses, ${data.edges?.length ?? 0} edges, and ${Object.keys(data.node_positions || {}).length} positions to ${UNIVERSAL_DB_FILE}`);
 
-  // ALSO sync to src/data/initialData.ts so any new build, cold container, or device
-  // immediately has all imported verses and edges baked directly into the codebase!
+  // ALSO sync to src/data/initialData.ts and public/database.json so any new build, Vercel deployment, or cold container
+  // immediately has all arranged coordinates and data baked directly into the repository!
   try {
     const candidatePath1 = path.resolve(process.cwd(), 'src', 'data', 'initialData.ts');
     const candidatePath2 = path.resolve(__dirname, 'src', 'data', 'initialData.ts');
@@ -84,6 +106,18 @@ function saveUniversalDatabase(data: any): void {
     }
   } catch (err) {
     console.warn(`[Universal DB] Could not sync to initialData.ts:`, err);
+  }
+
+  try {
+    const publicDir = path.resolve(process.cwd(), 'public');
+    if (!fs.existsSync(publicDir)) {
+      fs.mkdirSync(publicDir, { recursive: true });
+    }
+    const publicDbPath = path.resolve(publicDir, 'database.json');
+    fs.writeFileSync(publicDbPath, serialized, 'utf-8');
+    console.log(`[Universal DB] Also synchronized public/database.json directly to disk`);
+  } catch (err) {
+    console.warn(`[Universal DB] Could not sync to public/database.json:`, err);
   }
 }
 

@@ -28,6 +28,8 @@ export interface Verse {
   translation?: VerseTranslation;
   theme_tags: string[];
   notes?: string | null;
+  x?: number;
+  y?: number;
 }
 
 export interface Edge {

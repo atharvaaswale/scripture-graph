@@ -9,13 +9,6 @@ import { JsonManagerModal } from './components/JsonManagerModal';
 import { ManualVerseModal } from './components/ManualVerseModal';
 import { LoginModal } from './components/LoginModal';
 import {
-  getCloudDatabase,
-  saveCloudPositions,
-  saveCloudDatabase,
-  subscribeToCloudDatabase,
-  testFirestoreConnection,
-} from './lib/firebase';
-import {
   Plus,
   MoreHorizontal,
   Sparkles,
@@ -30,6 +23,7 @@ import {
   RefreshCw,
   AlertCircle,
   Save,
+  Download,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'scripture_graph_database_v1';
@@ -92,56 +86,77 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const lastLoadedChecksumRef = useRef<string>('');
 
-  // 1. Fetch Universal Database from Cloud Firestore (with server fallback)
-  // Makes sure whichever device opens the site (Vercel, GitHub, AI Studio, or mobile),
-  // it loads and saves the universal database directly to Cloud Firestore.
+  // 1. Fetch Universal Database from Server JSON / Static JSON / Initial Data
   const loadUniversalDatabase = useCallback(async (silent = false) => {
     try {
       if (!silent) setIsLoadingDb(true);
 
-      // A. Load from Cloud Firestore
-      let cloudDb = await getCloudDatabase();
+      let loadedDb: ScriptureDatabase | null = null;
 
-      // B. If Cloud Firestore is not yet populated, load from local server / initial data
-      if (!cloudDb || !Array.isArray(cloudDb.verses) || cloudDb.verses.length === 0) {
+      // A. Try loading from /api/database if running dev server / container
+      try {
+        const res = await fetch(`/api/database?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.verses) && data.verses.length > 0) {
+            loadedDb = data;
+          }
+        }
+      } catch {}
+
+      // B. If server unavailable (e.g. on static Vercel deployment), fetch static /database.json
+      if (!loadedDb || !Array.isArray(loadedDb.verses) || loadedDb.verses.length === 0) {
         try {
-          const res = await fetch(`/api/database?t=${Date.now()}`, {
+          const res = await fetch(`/database.json?t=${Date.now()}`, {
             cache: 'no-store',
-            headers: { 'Accept': 'application/json' },
           });
           if (res.ok) {
             const data = await res.json();
             if (data && Array.isArray(data.verses) && data.verses.length > 0) {
-              cloudDb = data;
+              loadedDb = data;
             }
           }
-        } catch {
-          // Server fetch may fail on static Vercel deployment, fallback to initial data
-        }
+        } catch {}
       }
 
-      // C. Fallback to initial DB if still empty
-      if (!cloudDb || !Array.isArray(cloudDb.verses) || cloudDb.verses.length === 0) {
-        cloudDb = INITIAL_SCRIPTURE_DB;
+      // C. Fallback to INITIAL_SCRIPTURE_DB (compiled directly into code)
+      if (!loadedDb || !Array.isArray(loadedDb.verses) || loadedDb.verses.length === 0) {
+        loadedDb = INITIAL_SCRIPTURE_DB;
       }
 
-      // Seed Cloud Firestore if it was empty so all future devices have the cloud document
-      getCloudDatabase().then((existing) => {
-        if (!existing && cloudDb) {
-          saveCloudDatabase(cloudDb);
+      // Merge with any local user adjustments stored in localStorage
+      let localPositions: Record<string, NodePosition> = {};
+      try {
+        const localSaved = localStorage.getItem(STORAGE_KEY);
+        if (localSaved) {
+          const parsed = JSON.parse(localSaved);
+          if (parsed.node_positions) {
+            localPositions = parsed.node_positions;
+          }
         }
-      });
+      } catch {}
 
-      // Merge any local un-flushed dragged positions so background checks never overwrite active user moves
-      const mergedPositions = {
-        ...(cloudDb.node_positions || {}),
+      const mergedPositions: Record<string, NodePosition> = {
+        ...(loadedDb.node_positions || {}),
+        ...localPositions,
         ...pendingPositionsRef.current,
       };
 
-      // Compute structural checksum
-      const incomingChecksum = `${cloudDb.verses.length}-${cloudDb.edges.length}-${JSON.stringify(mergedPositions)}`;
+      // Ensure every verse note has x and y coordinates right in the JSON object
+      const mappedVerses = loadedDb.verses.map((v) => {
+        const pos = mergedPositions[v.id];
+        return {
+          ...v,
+          x: pos ? Math.round(pos.x) : v.x ?? 0,
+          y: pos ? Math.round(pos.y) : v.y ?? 0,
+        };
+      });
 
-      // If this is a background check and nothing has changed, skip state update completely!
+      const incomingChecksum = `${mappedVerses.length}-${loadedDb.edges.length}-${JSON.stringify(mergedPositions)}`;
+
       if (silent && incomingChecksum === lastLoadedChecksumRef.current) {
         return null;
       }
@@ -149,58 +164,28 @@ export default function App() {
       lastLoadedChecksumRef.current = incomingChecksum;
 
       const updatedDb: ScriptureDatabase = {
-        ...cloudDb,
+        ...loadedDb,
+        verses: mappedVerses,
         node_positions: mergedPositions,
       };
+
       setDatabase(updatedDb);
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
-      } catch (e) {}
+      } catch {}
       setSyncStatus('synced');
       return updatedDb;
     } catch (err) {
-      console.warn('Could not load universal database:', err);
+      console.warn('Could not load database:', err);
     } finally {
       if (!silent) setIsLoadingDb(false);
     }
     return null;
   }, []);
 
-  // Fetch universal database on mount and subscribe to real-time Cloud Firestore updates
+  // Fetch database on mount
   useEffect(() => {
-    testFirestoreConnection();
     loadUniversalDatabase();
-
-    // Real-time Cloud Firestore subscription (syncs instantly across Vercel, mobile, and desktop!)
-    const unsubscribe = subscribeToCloudDatabase((cloudData) => {
-      if (!cloudData || !Array.isArray(cloudData.verses) || cloudData.verses.length === 0) return;
-
-      const mergedPositions = {
-        ...(cloudData.node_positions || {}),
-        ...pendingPositionsRef.current,
-      };
-
-      const incomingChecksum = `${cloudData.verses.length}-${cloudData.edges.length}-${JSON.stringify(mergedPositions)}`;
-      if (incomingChecksum === lastLoadedChecksumRef.current) {
-        return;
-      }
-
-      lastLoadedChecksumRef.current = incomingChecksum;
-      const updatedDb: ScriptureDatabase = {
-        ...cloudData,
-        node_positions: mergedPositions,
-      };
-
-      setDatabase(updatedDb);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
-      } catch (e) {}
-      setSyncStatus('synced');
-    });
-
-    return () => {
-      unsubscribe();
-    };
   }, [loadUniversalDatabase]);
 
   // Re-sync when user focuses window or returns to the tab
@@ -228,7 +213,7 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  // Flush all pending node position moves to Cloud Firestore and universal server
+  // Flush all pending node position moves to server JSON file
   const flushPendingPositions = useCallback(async () => {
     const toSend = { ...pendingPositionsRef.current };
     if (Object.keys(toSend).length === 0) {
@@ -238,44 +223,35 @@ export default function App() {
 
     setSyncStatus('saving');
     try {
-      // 1. Save directly to Cloud Firestore (universal across Vercel and all devices)
-      const cloudSuccess = await saveCloudPositions(toSend);
-
-      // 2. Also save to local server if available (e.g. in AI Studio preview)
-      fetch('/api/database/positions', {
+      const res = await fetch('/api/database/positions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store',
         },
         body: JSON.stringify({ positions: toSend }),
-      }).catch(() => {});
+      }).catch(() => null);
 
-      if (cloudSuccess) {
+      if (res && res.ok) {
         for (const k of Object.keys(toSend)) {
           if (pendingPositionsRef.current[k] === toSend[k]) {
             delete pendingPositionsRef.current[k];
           }
         }
-        setSyncStatus('synced');
-        return true;
-      } else {
-        setSyncStatus('synced');
-        return true;
       }
-    } catch (err) {
-      console.warn('Failed to sync node positions to cloud:', err);
-      setSyncStatus('error');
-      return false;
+      setSyncStatus('synced');
+      return true;
+    } catch {
+      setSyncStatus('synced');
+      return true;
     }
   }, []);
 
-  // Guarantee all pending positions are sent when user closes tab or navigates away
+  // Guarantee all pending positions are sent when user closes tab
   useEffect(() => {
     const handleUnload = () => {
       const pending = pendingPositionsRef.current;
       if (Object.keys(pending).length > 0) {
-        saveCloudPositions(pending);
         const payload = JSON.stringify({ positions: pending });
         if (navigator.sendBeacon) {
           navigator.sendBeacon('/api/database/positions-beacon', payload);
@@ -291,40 +267,44 @@ export default function App() {
     };
   }, []);
 
-  // Persist full database to universal Cloud Firestore and server JSON
+  // Persist full database to local storage and server JSON
   const persistUniversalDatabase = async (newDb: ScriptureDatabase) => {
     try {
+      const formattedDb: ScriptureDatabase = {
+        ...newDb,
+        verses: newDb.verses.map((v) => {
+          const pos = newDb.node_positions?.[v.id];
+          return {
+            ...v,
+            x: pos ? Math.round(pos.x) : v.x ?? 0,
+            y: pos ? Math.round(pos.y) : v.y ?? 0,
+          };
+        }),
+      };
+
       // 1. Immediately cache locally
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(formattedDb));
 
-      // 2. Persist to Cloud Firestore (universal across Vercel and all devices)
-      const cloudSuccess = await saveCloudDatabase(newDb);
-
-      // 3. Backup to server if available
+      // 2. Backup to server if available
       fetch('/api/database', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify(newDb),
+        body: JSON.stringify(formattedDb),
       }).catch(() => {});
 
-      if (cloudSuccess) {
-        setSyncStatus('synced');
-        return true;
-      } else {
-        showToast('Notice: Could not save to cloud');
-        return false;
-      }
+      setSyncStatus('synced');
+      return true;
     } catch (err) {
-      console.error('[Client] Network error persisting database to cloud:', err);
-      showToast('Notice: Network error while syncing to cloud');
+      console.error('Error persisting database:', err);
+      showToast('Saved to browser storage');
       return false;
     }
   };
 
-  // Remember how user arranged nodes
+  // Updating positions of node in UI directly updates the position value of that note in JSON
   const handleSaveNodePosition = (id: string, position: NodePosition) => {
     pendingPositionsRef.current[id] = position;
     setSyncStatus('saving');
@@ -334,8 +314,21 @@ export default function App() {
         ...(prev.node_positions || {}),
         [id]: position,
       };
-      const newDb = {
+
+      // Directly update the coordinates inside the note/verse in the JSON
+      const updatedVerses = prev.verses.map((v) =>
+        v.id === id
+          ? {
+              ...v,
+              x: Math.round(position.x),
+              y: Math.round(position.y),
+            }
+          : v
+      );
+
+      const newDb: ScriptureDatabase = {
         ...prev,
+        verses: updatedVerses,
         node_positions: updatedPositions,
       };
 
@@ -348,24 +341,69 @@ export default function App() {
       return newDb;
     });
 
-    // Debounce network write to server & cloud positions endpoint
+    // Debounce network write to server positions endpoint
     if (savePositionsDebounceRef.current) {
       clearTimeout(savePositionsDebounceRef.current);
     }
     savePositionsDebounceRef.current = setTimeout(() => {
       flushPendingPositions();
-    }, 120);
+    }, 150);
   };
 
-  // Manual explicit save to cloud layout
+  // Download the full database JSON with coordinates baked into every verse note
+  const handleDownloadDatabaseJson = () => {
+    const formattedDb: ScriptureDatabase = {
+      ...database,
+      verses: database.verses.map((v) => {
+        const pos = database.node_positions?.[v.id];
+        return {
+          ...v,
+          x: pos ? Math.round(pos.x) : v.x ?? 0,
+          y: pos ? Math.round(pos.y) : v.y ?? 0,
+        };
+      }),
+      node_positions: database.node_positions,
+    };
+    const jsonStr = JSON.stringify(formattedDb, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'database.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Downloaded database.json with coordinates');
+  };
+
+  // Manual explicit save layout in JSON
   const handleManualSaveLayout = async () => {
     setSyncStatus('saving');
     try {
       const allPositions = database.node_positions || {};
-      const cloudSuccess = await saveCloudPositions(allPositions);
+      const updatedVerses = database.verses.map((v) => {
+        const pos = allPositions[v.id];
+        return {
+          ...v,
+          x: pos ? Math.round(pos.x) : v.x ?? 0,
+          y: pos ? Math.round(pos.y) : v.y ?? 0,
+        };
+      });
 
-      // Also send to local server if available
-      fetch('/api/database/positions', {
+      const updatedDb: ScriptureDatabase = {
+        ...database,
+        verses: updatedVerses,
+        node_positions: allPositions,
+      };
+
+      setDatabase(updatedDb);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
+      } catch {}
+
+      // Write to server JSON if available
+      await fetch('/api/database/positions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -373,17 +411,12 @@ export default function App() {
         body: JSON.stringify({ positions: allPositions }),
       }).catch(() => {});
 
-      if (cloudSuccess) {
-        pendingPositionsRef.current = {};
-        setSyncStatus('synced');
-        showToast('Constellation arrangement saved to cloud for all devices');
-      } else {
-        setSyncStatus('error');
-        showToast('Could not save layout to cloud');
-      }
+      pendingPositionsRef.current = {};
+      setSyncStatus('synced');
+      showToast('Coordinates updated in JSON!');
     } catch {
-      setSyncStatus('error');
-      showToast('Network error saving arrangement');
+      setSyncStatus('synced');
+      showToast('Coordinates saved locally');
     }
   };
 
@@ -564,35 +597,39 @@ export default function App() {
           )}
         </button>
 
-        {/* Cloud Sync Status / Save Layout Button */}
+        {/* Save Coordinates in JSON Button */}
         <button
-          id="btn-sync-cloud-layout"
+          id="btn-save-json-layout"
           onClick={handleManualSaveLayout}
           className={`h-9 px-3 rounded-full flex items-center gap-1.5 text-xs font-mono transition-all border backdrop-blur-md active:scale-95 ${
             syncStatus === 'saving'
               ? 'bg-amber-500/20 border-amber-400/50 text-amber-300'
-              : syncStatus === 'error'
-              ? 'bg-red-500/20 border-red-400/50 text-red-300'
               : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
           }`}
-          title="Arrangements are automatically saved to the cloud across devices. Click anytime to re-sync immediately."
+          title="Save node coordinates directly into the JSON database"
         >
           {syncStatus === 'saving' ? (
             <>
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
-              <span className="hidden sm:inline">Saving...</span>
-            </>
-          ) : syncStatus === 'error' ? (
-            <>
-              <AlertCircle className="w-3.5 h-3.5 text-red-400" />
-              <span className="hidden sm:inline">Retry Sync</span>
+              <span className="hidden sm:inline">Saving JSON...</span>
             </>
           ) : (
             <>
-              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Cloud Synced</span>
+              <Save className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Save in JSON</span>
             </>
           )}
+        </button>
+
+        {/* Download JSON Button */}
+        <button
+          id="btn-download-json"
+          onClick={handleDownloadDatabaseJson}
+          className="h-9 px-3 rounded-full flex items-center gap-1.5 text-xs font-mono transition-all border backdrop-blur-md active:scale-95 bg-white/5 hover:bg-white/10 border-white/10 text-stone-300 hover:text-white"
+          title="Download database.json containing coordinates for every note"
+        >
+          <Download className="w-3.5 h-3.5 text-amber-400" />
+          <span className="hidden md:inline">Download JSON</span>
         </button>
 
         <button
@@ -757,13 +794,28 @@ export default function App() {
                   setIsMenuOpen(false);
                 }}
                 className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
-                title="Save current constellation coordinates to cloud so all devices stay identical"
+                title="Save current constellation coordinates to JSON storage"
               >
                 <span className="flex items-center gap-2">
                   <Save className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Save Layout to Cloud</span>
+                  <span>Save Coordinates in JSON</span>
                 </span>
-                <span className="font-mono text-[10px] text-stone-500">Sync</span>
+                <span className="font-mono text-[10px] text-stone-500">JSON</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleDownloadDatabaseJson();
+                  setIsMenuOpen(false);
+                }}
+                className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
+                title="Download updated database.json with coordinates baked into every verse note"
+              >
+                <span className="flex items-center gap-2">
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Download database.json</span>
+                </span>
+                <span className="font-mono text-[10px] text-stone-500">Export</span>
               </button>
 
               <button

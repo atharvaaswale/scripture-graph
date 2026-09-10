@@ -629,6 +629,9 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
         posX = Math.round(saved.x);
         posY = Math.round(saved.y);
+      } else if (typeof v.x === 'number' && typeof v.y === 'number') {
+        posX = Math.round(v.x);
+        posY = Math.round(v.y);
       } else if (existing && typeof existing.x === 'number' && typeof existing.y === 'number') {
         posX = Math.round(existing.x);
         posY = Math.round(existing.y);
