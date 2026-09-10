@@ -9,13 +9,13 @@ interface GraphVisualizationProps {
   onSelectVerse: (verse: Verse) => void;
   selectedVerseId: string | null;
   activeChainVerseIds?: string[];
-  isCuratorMode: boolean;
+  isCuratorMode?: boolean;
   onAddEdge?: (edge: Edge) => void;
   onUpdateEdge?: (from: string, to: string, updatedWhy: string) => void;
   onDeleteEdge?: (from: string, to: string) => void;
   activeScriptures: Set<string>;
-  activeRelations: Set<RelationType>;
-  numeralMode?: 'image-match' | 'devanagari' | 'latin';
+  activeRelations?: Set<RelationType>;
+  numeralMode?: 'devanagari' | 'latin';
 }
 
 export interface GraphNode extends d3.SimulationNodeDatum {
@@ -61,10 +61,10 @@ const ALL_RELATIONS: RelationType[] = [
   'exemplifies',
 ];
 
-// Helper: Get node label matching image UI
+// Helper: Get node label matching image UI (Devanagari or English numbers)
 export function getNodeDisplay(
   verse: Verse,
-  mode: 'image-match' | 'devanagari' | 'latin' | string = 'image-match'
+  mode: 'devanagari' | 'latin' | string = 'devanagari'
 ): { label: string; isDevanagari: boolean; subtitle: string } {
   const shortId = verse.id.replace(/^[A-Z]+-/, '');
 
@@ -74,17 +74,7 @@ export function getNodeDisplay(
     return { label: dev, isDevanagari: true, subtitle: verse.display_ref };
   }
 
-  if (mode === 'latin') {
-    return { label: shortId, isDevanagari: false, subtitle: verse.display_ref };
-  }
-
-  // Image-match mode (exact replica of image.png):
-  // DB-6.1.16 is displayed in Devanagari numerals: "६.१.१६"
-  // MS-178, MS-179, MS-189, DB-5.1.40 are in bold digits
-  if (verse.id === 'DB-6.1.16') {
-    return { label: '६.१.१६', isDevanagari: true, subtitle: verse.display_ref };
-  }
-
+  // English / Latin numbers:
   return { label: shortId, isDevanagari: false, subtitle: verse.display_ref };
 }
 
@@ -167,13 +157,13 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   onSelectVerse,
   selectedVerseId,
   activeChainVerseIds,
-  isCuratorMode,
+  isCuratorMode = true,
   onAddEdge,
   onUpdateEdge,
   onDeleteEdge,
   activeScriptures,
   activeRelations,
-  numeralMode = 'image-match',
+  numeralMode = 'devanagari',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -181,6 +171,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null);
   const currentTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const isInitializedRef = useRef(false);
+  const dragJustEndedRef = useRef(false);
 
   // Screen-space cursor tracking & spotlight (Google Stitch style)
   const [pointerPos, setPointerPos] = useState<{ x: number; y: number; visible: boolean }>({
@@ -188,16 +179,6 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     y: 390,
     visible: true,
   });
-
-  // Drag-to-connect active state
-  const [wireDrag, setWireDrag] = useState<{
-    sourceId: string;
-    sourceX: number;
-    sourceY: number;
-    currentX: number;
-    currentY: number;
-    hoverTargetId: string | null;
-  } | null>(null);
 
   // Relation picker popup on connection release
   const [relationPicker, setRelationPicker] = useState<{
@@ -230,7 +211,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   const filteredEdges = useMemo(() => {
     return edges.filter(
       (e) =>
-        activeRelations.has(e.relation) &&
+        (!activeRelations || activeRelations.has(e.relation)) &&
         filteredVerseIdSet.has(e.from) &&
         filteredVerseIdSet.has(e.to)
     );
@@ -589,6 +570,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         radius: 20,
         x: existing?.x ?? hint?.x ?? (Math.random() - 0.5) * 160,
         y: existing?.y ?? hint?.y ?? (Math.random() - 0.5) * 160,
+        fx: existing?.fx,
+        fy: existing?.fy,
         vx: 0,
         vy: 0,
       };
@@ -628,9 +611,35 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
 
     simulationRef.current = simulation;
 
-    // Groups for links and nodes
+    // Groups for links, nodes, and live drag wire preview
     const linksGroup = g.append('g').attr('class', 'links');
     const nodesGroup = g.append('g').attr('class', 'nodes');
+    const wirePreviewGroup = g.append('g').attr('class', 'wire-preview-layer pointer-events-none');
+
+    const wirePreviewLine = wirePreviewGroup
+      .append('line')
+      .attr('stroke', '#fbbf24')
+      .attr('stroke-width', 2.4)
+      .attr('stroke-dasharray', '4,4')
+      .attr('stroke-opacity', 0.95)
+      .style('display', 'none');
+
+    const wirePreviewSnap = wirePreviewGroup
+      .append('circle')
+      .attr('r', 28)
+      .attr('fill', 'rgba(52, 211, 153, 0.25)')
+      .attr('stroke', '#34d399')
+      .attr('stroke-width', 2)
+      .attr('stroke-dasharray', '3,3')
+      .style('display', 'none');
+
+    const wirePreviewTip = wirePreviewGroup
+      .append('circle')
+      .attr('r', 5.5)
+      .attr('fill', '#fde047')
+      .attr('stroke', '#ffffff')
+      .attr('stroke-width', 1.5)
+      .style('display', 'none');
 
     // Draw curved bezier links
     const link = linksGroup
@@ -824,111 +833,151 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       .attr('letter-spacing', '0.01em')
       .text((d) => d.verse.display_ref);
 
-    // Node drag & interaction behavior
+    // Node drag & interaction behavior based on isCuratorMode
     if (isCuratorMode) {
-      // CURATOR MODE: DIRECT MANIPULATION DRAG-TO-CONNECT
+      // CURATOR MODE: Drag-to-connect behavior
       let activeDragSource: GraphNode | null = null;
+      let currentHoverTarget: GraphNode | null = null;
+      let hasMoved = false;
+      let dragStartPos = { x: 0, y: 0 };
 
-      const dragBehavior = d3
+      const curatorDrag = d3
         .drag<SVGGElement, GraphNode>()
         .on('start', (event, d) => {
           activeDragSource = d;
-          const [cx, cy] = [d.x ?? 0, d.y ?? 0];
-          setWireDrag({
-            sourceId: d.id,
-            sourceX: cx,
-            sourceY: cy,
-            currentX: cx,
-            currentY: cy,
-            hoverTargetId: null,
-          });
+          currentHoverTarget = null;
+          hasMoved = false;
+          const [cx, cy] = d3.pointer(event, g.node());
+          dragStartPos = { x: cx, y: cy };
         })
         .on('drag', (event) => {
           if (!activeDragSource) return;
-          const t = currentTransformRef.current;
-          const [canvasX, canvasY] = [
-            (event.sourceEvent.clientX - (containerRef.current?.getBoundingClientRect().left || 0) - t.x) / t.k,
-            (event.sourceEvent.clientY - (containerRef.current?.getBoundingClientRect().top || 0) - t.y) / t.k,
-          ];
+          const [cx, cy] = d3.pointer(event, g.node());
+          const distanceMoved = Math.hypot(cx - dragStartPos.x, cy - dragStartPos.y);
+          if (distanceMoved > 5) {
+            hasMoved = true;
+          }
+          if (!hasMoved) return;
 
-          let candidateTarget: GraphNode | null = null;
+          // Find candidate target node within snap radius (48px)
+          let candidate: GraphNode | null = null;
+          let minDistance = 48;
           for (const n of nodesRef.current) {
             if (n.id === activeDragSource.id) continue;
-            const dist = Math.hypot((n.x ?? 0) - canvasX, (n.y ?? 0) - canvasY);
-            if (dist < 34) {
-              candidateTarget = n;
-              break;
+            const dist = Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy);
+            if (dist < minDistance) {
+              minDistance = dist;
+              candidate = n;
             }
           }
 
-          setWireDrag({
-            sourceId: activeDragSource.id,
-            sourceX: activeDragSource.x ?? 0,
-            sourceY: activeDragSource.y ?? 0,
-            currentX: candidateTarget?.x ?? canvasX,
-            currentY: candidateTarget?.y ?? canvasY,
-            hoverTargetId: candidateTarget ? candidateTarget.id : null,
-          });
+          currentHoverTarget = candidate;
+          const sx = activeDragSource.x ?? 0;
+          const sy = activeDragSource.y ?? 0;
+
+          wirePreviewLine
+            .attr('x1', sx)
+            .attr('y1', sy)
+            .style('display', 'block');
+
+          if (candidate) {
+            wirePreviewLine
+              .attr('x2', candidate.x ?? 0)
+              .attr('y2', candidate.y ?? 0)
+              .attr('stroke', '#34d399');
+
+            wirePreviewSnap
+              .attr('cx', candidate.x ?? 0)
+              .attr('cy', candidate.y ?? 0)
+              .style('display', 'block');
+
+            wirePreviewTip.style('display', 'none');
+          } else {
+            wirePreviewLine
+              .attr('x2', cx)
+              .attr('y2', cy)
+              .attr('stroke', '#fbbf24');
+
+            wirePreviewSnap.style('display', 'none');
+
+            wirePreviewTip
+              .attr('cx', cx)
+              .attr('cy', cy)
+              .style('display', 'block');
+          }
         })
         .on('end', () => {
-          if (!activeDragSource) return;
+          wirePreviewLine.style('display', 'none');
+          wirePreviewSnap.style('display', 'none');
+          wirePreviewTip.style('display', 'none');
 
-          const t = currentTransformRef.current;
-          let targetNode: GraphNode | null = null;
-          if (wireDrag?.hoverTargetId) {
-            targetNode = nodesRef.current.find((n) => n.id === wireDrag.hoverTargetId) || null;
-          }
+          if (hasMoved && activeDragSource && currentHoverTarget) {
+            dragJustEndedRef.current = true;
+            setTimeout(() => {
+              dragJustEndedRef.current = false;
+            }, 250);
 
-          if (targetNode) {
-            const screenX = (targetNode.x ?? 0) * t.k + t.x;
-            const screenY = (targetNode.y ?? 0) * t.k + t.y;
+            const t = currentTransformRef.current;
+            const screenX = (currentHoverTarget.x ?? 0) * t.k + t.x;
+            const screenY = (currentHoverTarget.y ?? 0) * t.k + t.y;
 
             setRelationPicker({
               fromId: activeDragSource.id,
-              toId: targetNode.id,
+              toId: currentHoverTarget.id,
               screenX,
               screenY,
             });
           }
 
-          setWireDrag(null);
           activeDragSource = null;
+          currentHoverTarget = null;
+          hasMoved = false;
         });
 
-      node.call(dragBehavior);
-
-      node.on('click', (event, d) => {
-        event.stopPropagation();
-        if (!wireDrag) {
-          onSelectVerse(d.verse);
-        }
-      });
+      node.call(curatorDrag);
     } else {
-      // EXPLORATION MODE: Gentle manual node movement
-      const exploreDrag = d3
+      // MOVE / ARRANGE MODE: Move nodes freely as per user will!
+      let hasDraggedNode = false;
+
+      const moveDrag = d3
         .drag<SVGGElement, GraphNode>()
         .on('start', (event, d) => {
+          hasDraggedNode = false;
           if (!event.active) simulation.alphaTarget(0.2).restart();
           d.fx = d.x;
           d.fy = d.y;
         })
         .on('drag', (event, d) => {
+          hasDraggedNode = true;
           d.fx = event.x;
           d.fy = event.y;
+          d.x = event.x;
+          d.y = event.y;
         })
         .on('end', (event, d) => {
           if (!event.active) simulation.alphaTarget(0);
-          d.fx = null;
-          d.fy = null;
+          if (hasDraggedNode) {
+            dragJustEndedRef.current = true;
+            setTimeout(() => {
+              dragJustEndedRef.current = false;
+            }, 250);
+            // Pin node right where user placed it so it stays there!
+            d.fx = event.x;
+            d.fy = event.y;
+            d.x = event.x;
+            d.y = event.y;
+          }
         });
 
-      node.call(exploreDrag);
-
-      node.on('click', (event, d) => {
-        event.stopPropagation();
-        onSelectVerse(d.verse);
-      });
+      node.call(moveDrag);
     }
+
+    node.on('click', (event, d) => {
+      event.stopPropagation();
+      if (!dragJustEndedRef.current) {
+        onSelectVerse(d.verse);
+      }
+    });
 
     // Simulation Tick Updates
     simulation.on('tick', () => {
@@ -1063,41 +1112,16 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         ref={svgRef}
         className="w-full h-full cursor-grab active:cursor-grabbing"
         onClick={() => {
+          if (dragJustEndedRef.current) return;
           setSelectedEdge(null);
           setRelationPicker(null);
         }}
-      >
-        {/* Dynamic Glowing Live Wire during Drag-to-Connect */}
-        {wireDrag && (
-          <g
-            className="pointer-events-none"
-            transform={currentTransformRef.current ? currentTransformRef.current.toString() : ''}
-          >
-            <line
-              x1={wireDrag.sourceX}
-              y1={wireDrag.sourceY}
-              x2={wireDrag.currentX}
-              y2={wireDrag.currentY}
-              stroke="#fbbf24"
-              strokeWidth={2}
-              strokeDasharray="4,4"
-              strokeOpacity={0.9}
-            />
-            <circle
-              cx={wireDrag.currentX}
-              cy={wireDrag.currentY}
-              r={wireDrag.hoverTargetId ? 24 : 7}
-              fill={wireDrag.hoverTargetId ? 'rgba(52, 211, 153, 0.3)' : 'rgba(251, 191, 36, 0.5)'}
-              stroke={wireDrag.hoverTargetId ? '#34d399' : '#fbbf24'}
-              strokeWidth={1.6}
-            />
-          </g>
-        )}
-      </svg>
+      />
 
       {/* RELATION PICKER POPUP (Instant Contextual Tap Target on Release) */}
       {relationPicker && (
         <div
+          onClick={(e) => e.stopPropagation()}
           className="absolute z-40 transform -translate-x-1/2 -translate-y-full mb-3 animate-in fade-in zoom-in-95 duration-150"
           style={{
             left: `${Math.max(140, Math.min((containerRef.current?.clientWidth || 800) - 140, relationPicker.screenX))}px`,
@@ -1106,8 +1130,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         >
           <div className="bg-[#12141d]/95 border border-white/15 rounded-2xl p-2.5 shadow-2xl backdrop-blur-md flex flex-col gap-2">
             <div className="flex items-center justify-between gap-3 px-1.5 text-[10px] text-stone-400 font-mono">
-              <span>
-                {relationPicker.fromId} → {relationPicker.toId}
+              <span className="text-amber-300 font-semibold">
+                Link: {relationPicker.fromId} → {relationPicker.toId}
               </span>
               <button
                 onClick={() => setRelationPicker(null)}
@@ -1118,7 +1142,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
             </div>
 
             {/* 6 Compact Tap Pills */}
-            <div className="flex flex-wrap gap-1.5 max-w-[260px]">
+            <div className="flex flex-wrap gap-1.5 max-w-[280px]">
               {ALL_RELATIONS.map((rel) => {
                 const style = RELATION_STYLES[rel];
                 return (

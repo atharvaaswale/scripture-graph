@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { INITIAL_SCRIPTURE_DB } from './data/initialData';
-import { ScriptureDatabase, Verse, Edge, Chain, RelationType } from './types';
-import { GraphVisualization, SCRIPTURE_THEMES, RELATION_STYLES } from './components/GraphVisualization';
+import { ScriptureDatabase, Verse, Edge } from './types';
+import { GraphVisualization, SCRIPTURE_THEMES } from './components/GraphVisualization';
 import { VerseCatalog } from './components/VerseCatalog';
-import { ChainsViewer } from './components/ChainsViewer';
 import { VerseDetailsModal } from './components/VerseDetailsModal';
 import { BatchProposerModal } from './components/BatchProposerModal';
 import { JsonManagerModal } from './components/JsonManagerModal';
@@ -13,14 +12,12 @@ import {
   MoreHorizontal,
   Sparkles,
   FileCode,
-  GitCommit,
   BookOpen,
   CheckCircle,
-  FileText,
-  Shield,
   RotateCcw,
   X,
-  Compass,
+  Move,
+  Link2,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'scripture_graph_database_v1';
@@ -38,14 +35,8 @@ export default function App() {
     return INITIAL_SCRIPTURE_DB;
   });
 
-  // Curator mode: false by default for pure contemplation & exploration
-  const [isCuratorMode, setIsCuratorMode] = useState(false);
-
   // Selected verse for the minimal 2-item overlay
   const [selectedVerse, setSelectedVerse] = useState<Verse | null>(null);
-
-  // Active Argument Chain (if any, highlights path in constellation)
-  const [activeChainId, setActiveChainId] = useState<string | null>(null);
 
   // Floating Modals / Overlays
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -53,17 +44,17 @@ export default function App() {
   const [isBatchProposerOpen, setIsBatchProposerOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
-  const [isChainsOpen, setIsChainsOpen] = useState(false);
-  const [isNotesOpen, setIsNotesOpen] = useState(false);
 
-  // Filters
+  // Scripture Filters
   const [activeScriptures, setActiveScriptures] = useState<Set<string>>(
     new Set(['MS', 'DB', 'BG', 'BP'])
   );
-  const [activeRelations, setActiveRelations] = useState<Set<RelationType>>(
-    new Set(['extends', 'supports', 'contrasts', 'restates', 'requires', 'exemplifies'])
-  );
-  const [numeralMode, setNumeralMode] = useState<'image-match' | 'devanagari' | 'latin'>('image-match');
+
+  // Curator Mode vs Move Mode toggle
+  const [isCuratorMode, setIsCuratorMode] = useState(false);
+
+  // Orb Numerals Mode: Devanagari or English numbers
+  const [numeralMode, setNumeralMode] = useState<'devanagari' | 'latin'>('devanagari');
 
   // Subtle toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -83,9 +74,7 @@ export default function App() {
 
   const handleCommitBatch = (
     newVerses: Verse[],
-    newEdges: Edge[],
-    newChains: Chain[],
-    reviewNotes?: string[]
+    newEdges: Edge[]
   ) => {
     setDatabase((prev) => {
       const existingIds = new Set(prev.verses.map((v) => v.id));
@@ -95,24 +84,17 @@ export default function App() {
       const existingEdgeKeys = new Set(prev.edges.map(edgeKey));
       const freshEdges = newEdges.filter((e) => !existingEdgeKeys.has(edgeKey(e)));
 
-      const mergedNotes = [
-        ...(prev.review_notes || []),
-        ...(reviewNotes || []).map((n) => `[${new Date().toLocaleTimeString()}]: ${n}`),
-      ];
-
       return {
         ...prev,
         verses: [...prev.verses, ...freshVerses],
         edges: [...prev.edges, ...freshEdges],
-        chains: [...prev.chains, ...newChains],
-        review_notes: mergedNotes,
       };
     });
 
     showToast(`Merged ${newVerses.length} verses & ${newEdges.length} connections.`);
   };
 
-  // Direct manipulation connection created on canvas
+  // Direct manipulation connection created on canvas or modal
   const handleAddEdge = (edge: Edge) => {
     setDatabase((prev) => {
       const filtered = prev.edges.filter((e) => !(e.from === edge.from && e.to === edge.to));
@@ -155,28 +137,8 @@ export default function App() {
       ...prev,
       verses: prev.verses.filter((v) => v.id !== verseId),
       edges: prev.edges.filter((e) => e.from !== verseId && e.to !== verseId),
-      chains: prev.chains.map((c) => ({
-        ...c,
-        sequence: c.sequence.filter((id) => id !== verseId),
-      })),
     }));
     showToast(`Deleted ${verseId}`);
-  };
-
-  const handleAddChain = (chain: Chain) => {
-    setDatabase((prev) => ({
-      ...prev,
-      chains: [...prev.chains, chain],
-    }));
-    showToast(`Saved chain: ${chain.title}`);
-  };
-
-  const handleDeleteChain = (chainId: string) => {
-    setDatabase((prev) => ({
-      ...prev,
-      chains: prev.chains.filter((c) => c.id !== chainId),
-    }));
-    showToast('Deleted chain');
   };
 
   const handleResetDatabase = () => {
@@ -195,20 +157,6 @@ export default function App() {
       return next;
     });
   };
-
-  const toggleRelationFilter = (rel: RelationType) => {
-    setActiveRelations((prev) => {
-      const next = new Set(prev);
-      if (next.has(rel)) {
-        if (next.size > 1) next.delete(rel);
-      } else {
-        next.add(rel);
-      }
-      return next;
-    });
-  };
-
-  const activeChain = database.chains.find((c) => c.id === activeChainId);
 
   return (
     <div className="w-screen h-screen bg-[#0e111a] text-stone-200 relative overflow-hidden font-sans select-none">
@@ -230,8 +178,44 @@ export default function App() {
         </p>
       </div>
 
-      {/* SINGLE MENU BUTTON (Top Right) */}
-      <div className="absolute top-5 right-6 z-30">
+      {/* TOP RIGHT CONTROLS: Small Curator Mode Toggle + Menu Button */}
+      <div className="absolute top-5 right-6 z-30 flex items-center gap-2">
+        {/* Small Curator Mode Toggle Button */}
+        <button
+          id="btn-curator-toggle"
+          onClick={() => {
+            const next = !isCuratorMode;
+            setIsCuratorMode(next);
+            showToast(
+              next
+                ? 'Curator Mode: Drag between orbs to link'
+                : 'Move Mode: Drag orbs freely to position'
+            );
+          }}
+          className={`h-9 px-3 rounded-full flex items-center gap-2 text-xs font-mono transition-all border backdrop-blur-md active:scale-95 ${
+            isCuratorMode
+              ? 'bg-amber-500/25 border-amber-400/60 text-amber-200 shadow-md ring-1 ring-amber-400/40'
+              : 'bg-white/5 hover:bg-white/10 border-white/10 text-stone-300 hover:text-white'
+          }`}
+          title={
+            isCuratorMode
+              ? 'Curator Mode (Linking): Drag from an orb to connect it to another. Click to switch to Move Mode.'
+              : 'Move Mode: Drag orbs freely to position them as you wish. Click to switch to Curator Mode.'
+          }
+        >
+          {isCuratorMode ? (
+            <>
+              <Link2 className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-semibold text-amber-300">Curator</span>
+            </>
+          ) : (
+            <>
+              <Move className="w-3.5 h-3.5 text-stone-400" />
+              <span>Move</span>
+            </>
+          )}
+        </button>
+
         <button
           id="btn-main-menu"
           onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -251,31 +235,41 @@ export default function App() {
             onClick={(e) => e.stopPropagation()}
             className="absolute top-12 right-0 w-72 bg-[#12131c]/95 border border-white/15 rounded-2xl p-4 shadow-2xl backdrop-blur-xl space-y-4 text-xs animate-in fade-in zoom-in-95 duration-150 text-stone-300"
           >
-            {/* Curator Mode Switch */}
-            <div className="p-3 bg-white/5 rounded-xl border border-white/5 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Shield className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="font-semibold text-stone-200 text-xs">Curator Mode</span>
-                </div>
+            {/* Curator vs Move Mode Selector */}
+            <div className="space-y-1.5">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400">
+                Mode:
+              </span>
+              <div className="grid grid-cols-2 gap-1.5">
                 <button
-                  onClick={() => setIsCuratorMode(!isCuratorMode)}
-                  className={`w-9 h-5 rounded-full p-0.5 transition-colors ${
-                    isCuratorMode ? 'bg-amber-600' : 'bg-white/15'
+                  onClick={() => {
+                    setIsCuratorMode(false);
+                    showToast('Move Mode: Drag orbs freely to position');
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono text-center transition-colors border flex items-center justify-center gap-1.5 ${
+                    !isCuratorMode
+                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200 font-semibold'
+                      : 'bg-white/5 border-white/5 text-stone-400 hover:text-stone-200'
                   }`}
                 >
-                  <div
-                    className={`w-4 h-4 rounded-full bg-white transition-transform ${
-                      isCuratorMode ? 'translate-x-4' : 'translate-x-0'
-                    }`}
-                  />
+                  <Move className="w-3 h-3" />
+                  <span>Move</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setIsCuratorMode(true);
+                    showToast('Curator Mode: Drag between orbs to link');
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono text-center transition-colors border flex items-center justify-center gap-1.5 ${
+                    isCuratorMode
+                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200 font-semibold'
+                      : 'bg-white/5 border-white/5 text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  <Link2 className="w-3 h-3" />
+                  <span>Curator</span>
                 </button>
               </div>
-              <p className="text-[10px] text-stone-400 leading-relaxed">
-                {isCuratorMode
-                  ? 'Wire connections by dragging from star to star. Tap connections to annotate.'
-                  : 'Pure exploration & reading mode. Drag to pan and explore.'}
-              </p>
             </div>
 
             {/* Scripture Filters */}
@@ -307,96 +301,41 @@ export default function App() {
               </div>
             </div>
 
-            {/* Relation Lines Filter */}
-            <div className="space-y-1.5">
-              <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400">
-                Relation Filters:
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {(Object.keys(RELATION_STYLES) as RelationType[]).map((rel) => {
-                  const isActive = activeRelations.has(rel);
-                  const style = RELATION_STYLES[rel];
-                  return (
-                    <button
-                      key={rel}
-                      onClick={() => toggleRelationFilter(rel)}
-                      className={`px-2 py-0.5 rounded-full text-[10px] transition-colors border ${
-                        isActive
-                          ? 'bg-white/10 border-white/10 text-stone-200'
-                          : 'bg-transparent border-white/5 text-stone-600'
-                      }`}
-                    >
-                      <span
-                        className="inline-block w-1.5 h-1.5 rounded-full mr-1"
-                        style={{ backgroundColor: style.color }}
-                      />
-                      {rel}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Orb Numerals Mode */}
+            {/* Orb Numerals Mode (Devanagari vs English only) */}
             <div className="space-y-1.5 pt-1">
               <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400">
                 Orb Numerals:
               </span>
-              <div className="grid grid-cols-3 gap-1">
-                <button
-                  onClick={() => setNumeralMode('image-match')}
-                  className={`px-2 py-1 rounded-md text-[10px] font-mono text-center transition-colors border ${
-                    numeralMode === 'image-match'
-                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200'
-                      : 'bg-white/5 border-white/5 text-stone-400 hover:text-stone-200'
-                  }`}
-                  title="Authentic: ६.१.१६ on Dasbodh, 178 on Shlok"
-                >
-                  Authentic
-                </button>
+              <div className="grid grid-cols-2 gap-1.5">
                 <button
                   onClick={() => setNumeralMode('devanagari')}
-                  className={`px-2 py-1 rounded-md text-[10px] font-mono text-center transition-colors border ${
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono text-center transition-colors border flex items-center justify-center gap-1.5 ${
                     numeralMode === 'devanagari'
-                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200'
+                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200 font-semibold'
                       : 'bg-white/5 border-white/5 text-stone-400 hover:text-stone-200'
                   }`}
-                  title="All Devanagari (१७८, ५.१.४०)"
+                  title="Devanagari numerals (१७८, ५.१.४०, ६.१.१६)"
                 >
-                  १ २ ३
+                  <span>Devanagari</span>
+                  <span className="text-[10px] text-amber-400/80 font-devanagari">१ २ ३</span>
                 </button>
                 <button
                   onClick={() => setNumeralMode('latin')}
-                  className={`px-2 py-1 rounded-md text-[10px] font-mono text-center transition-colors border ${
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-mono text-center transition-colors border flex items-center justify-center gap-1.5 ${
                     numeralMode === 'latin'
-                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200'
+                      ? 'bg-amber-600/30 border-amber-400/50 text-amber-200 font-semibold'
                       : 'bg-white/5 border-white/5 text-stone-400 hover:text-stone-200'
                   }`}
-                  title="All Western (178, 5.1.40)"
+                  title="English numerals (178, 5.1.40, 6.1.16)"
                 >
-                  1 2 3
+                  <span>English</span>
+                  <span className="text-[10px] text-amber-400/80">1 2 3</span>
                 </button>
               </div>
             </div>
 
-            {/* Layers & Views */}
+            {/* Views */}
             <div className="pt-2 border-t border-white/10 space-y-1">
-              <button
-                onClick={() => {
-                  setIsChainsOpen(true);
-                  setIsMenuOpen(false);
-                }}
-                className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
-              >
-                <span className="flex items-center gap-2">
-                  <GitCommit className="w-3.5 h-3.5 text-amber-400" />
-                  Argument Chains
-                </span>
-                <span className="font-mono text-[10px] text-stone-500">
-                  {database.chains.length}
-                </span>
-              </button>
-
               <button
                 onClick={() => {
                   setIsCatalogOpen(true);
@@ -410,22 +349,6 @@ export default function App() {
                 </span>
                 <span className="font-mono text-[10px] text-stone-500">
                   {database.verses.length}
-                </span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setIsNotesOpen(true);
-                  setIsMenuOpen(false);
-                }}
-                className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
-              >
-                <span className="flex items-center gap-2">
-                  <FileText className="w-3.5 h-3.5 text-sky-400" />
-                  Scholar Review Notes
-                </span>
-                <span className="font-mono text-[10px] text-stone-500">
-                  {(database.review_notes || []).length}
                 </span>
               </button>
             </div>
@@ -471,20 +394,18 @@ export default function App() {
         )}
       </div>
 
-      {/* FULL-SCREEN INTERACTIVE CONSTELLATION GRAPH (Dominates 100% of the screen) */}
+      {/* FULL-SCREEN INTERACTIVE CONSTELLATION GRAPH */}
       <main className="w-full h-full">
         <GraphVisualization
           verses={database.verses}
           edges={database.edges}
           onSelectVerse={(v) => setSelectedVerse(v)}
           selectedVerseId={selectedVerse?.id || null}
-          activeChainVerseIds={activeChain?.sequence}
           isCuratorMode={isCuratorMode}
           onAddEdge={handleAddEdge}
           onUpdateEdge={handleUpdateEdge}
           onDeleteEdge={handleDeleteEdge}
           activeScriptures={activeScriptures}
-          activeRelations={activeRelations}
           numeralMode={numeralMode}
         />
       </main>
@@ -501,37 +422,15 @@ export default function App() {
         </button>
       </div>
 
-      {/* ACTIVE CHAIN HUD (If selected from menu) */}
-      {activeChain && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 max-w-md w-full px-4">
-          <div className="bg-[#12141e]/95 border border-amber-500/30 rounded-2xl px-4 py-2.5 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 overflow-hidden">
-              <Compass className="w-4 h-4 text-amber-400 shrink-0" />
-              <div className="truncate">
-                <span className="font-semibold text-stone-200">{activeChain.title}</span>
-                <span className="font-mono text-[10px] text-stone-500 block truncate">
-                  {activeChain.sequence.join(' → ')}
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={() => setActiveChainId(null)}
-              className="p-1 text-stone-500 hover:text-white rounded"
-              title="Clear chain highlight"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 1: POETIC MINIMAL VERSE DETAILS (Item 1: Devanagari, Item 2: Understated Ref) */}
+      {/* MODAL 1: POETIC VERSE DETAILS + CURATOR CONNECTION TOOLS */}
       <VerseDetailsModal
         verse={selectedVerse}
         database={database}
         onClose={() => setSelectedVerse(null)}
         onDeleteVerse={handleDeleteVerse}
-        isCuratorMode={isCuratorMode}
+        onAddEdge={handleAddEdge}
+        onDeleteEdge={handleDeleteEdge}
+        isCuratorMode={true}
       />
 
       {/* MODAL 2: MANUAL VERSE ENTRY */}
@@ -547,7 +446,7 @@ export default function App() {
         database={database}
         isOpen={isBatchProposerOpen}
         onClose={() => setIsBatchProposerOpen(false)}
-        onCommitBatch={handleCommitBatch}
+        onCommitBatch={(verses, edges) => handleCommitBatch(verses, edges)}
       />
 
       {/* MODAL 4: JSON DATABASE & SCHEMA EXPORT */}
@@ -582,74 +481,6 @@ export default function App() {
               onDeleteVerse={handleDeleteVerse}
               onClose={() => setIsCatalogOpen(false)}
             />
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 6: ARGUMENT CHAINS VIEWER OVERLAY */}
-      {isChainsOpen && (
-        <div
-          onClick={() => setIsChainsOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-150"
-        >
-          <div onClick={(e) => e.stopPropagation()} className="max-w-4xl w-full">
-            <ChainsViewer
-              database={database}
-              onSelectVerse={(v) => {
-                setSelectedVerse(v);
-                setIsChainsOpen(false);
-              }}
-              onAddChain={handleAddChain}
-              onDeleteChain={handleDeleteChain}
-              activeChainId={activeChainId}
-              setActiveChainId={setActiveChainId}
-              onClose={() => setIsChainsOpen(false)}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 7: SCHOLAR REVIEW NOTES OVERLAY */}
-      {isNotesOpen && (
-        <div
-          onClick={() => setIsNotesOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-150"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-[#10111a] border border-white/10 rounded-2xl max-w-xl w-full p-6 shadow-2xl text-stone-200 space-y-4"
-          >
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-sky-400" />
-                <h3 className="font-semibold text-stone-100 text-sm">
-                  Scholar Doctrinal Review Flags
-                </h3>
-              </div>
-              <button
-                onClick={() => setIsNotesOpen(false)}
-                className="p-1 text-stone-500 hover:text-white rounded"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="max-h-96 overflow-y-auto space-y-2 text-xs">
-              {(database.review_notes || []).length === 0 ? (
-                <p className="text-stone-500 italic p-4 text-center">
-                  No flags recorded. All scriptures and edges align with orthodox scholarship.
-                </p>
-              ) : (
-                (database.review_notes || []).map((note, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-xl bg-white/5 border border-white/5 text-stone-300 font-serif leading-relaxed"
-                  >
-                    {note}
-                  </div>
-                ))
-              )}
-            </div>
           </div>
         </div>
       )}
