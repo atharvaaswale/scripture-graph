@@ -14,12 +14,23 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
+// CORS & Preflight middleware for multi-device cross-network support
+app.use((req: Request, res: Response, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, Pragma, Expires');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // --- UNIVERSAL DATABASE PERSISTENCE ON DISK ---
 // Stored in data/universal_database.json so every device connects to the exact same dataset & positions
-const DATA_DIR = path.join(process.cwd(), 'data');
-const UNIVERSAL_DB_FILE = path.join(DATA_DIR, 'universal_database.json');
+const DATA_DIR = path.resolve(__dirname, 'data');
+const UNIVERSAL_DB_FILE = path.resolve(DATA_DIR, 'universal_database.json');
 
 function ensureUniversalDatabase(): any {
   try {
@@ -28,6 +39,7 @@ function ensureUniversalDatabase(): any {
     }
     if (!fs.existsSync(UNIVERSAL_DB_FILE)) {
       fs.writeFileSync(UNIVERSAL_DB_FILE, JSON.stringify(INITIAL_SCRIPTURE_DB, null, 2), 'utf-8');
+      console.log(`[Universal DB] Initialized database file at ${UNIVERSAL_DB_FILE}`);
       return INITIAL_SCRIPTURE_DB;
     }
     const content = fs.readFileSync(UNIVERSAL_DB_FILE, 'utf-8');
@@ -47,15 +59,22 @@ function saveUniversalDatabase(data: any): void {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
-  fs.writeFileSync(UNIVERSAL_DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  const serialized = JSON.stringify(data, null, 2);
+  fs.writeFileSync(UNIVERSAL_DB_FILE, serialized, 'utf-8');
+  console.log(`[Universal DB] Saved ${data.verses?.length ?? 0} verses, ${data.edges?.length ?? 0} edges, and ${Object.keys(data.node_positions || {}).length} positions to ${UNIVERSAL_DB_FILE}`);
 }
 
-// 1. Get Universal Database
+// 1. Get Universal Database (with explicit no-cache headers for instant cross-device updates)
 app.get('/api/database', (_req: Request, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     const db = ensureUniversalDatabase();
+    console.log(`[Universal DB] GET /api/database returning ${db.verses?.length || 0} verses to client`);
     res.json(db);
   } catch (err: any) {
+    console.error('[Universal DB] GET error:', err);
     res.status(500).json({ error: 'Failed to retrieve universal database' });
   }
 });
@@ -63,14 +82,17 @@ app.get('/api/database', (_req: Request, res: Response) => {
 // 2. Save Full Universal Database (verses, edges, chains, node_positions)
 app.post('/api/database', (req: Request, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache');
     const payload = req.body;
     if (!payload || !Array.isArray(payload.verses) || !Array.isArray(payload.edges)) {
+      console.warn('[Universal DB] POST invalid payload structure');
       return res.status(400).json({ error: 'Invalid database structure' });
     }
     saveUniversalDatabase(payload);
+    console.log(`[Universal DB] POST /api/database updated successfully with ${payload.verses.length} verses`);
     res.json({ success: true, database: payload });
   } catch (err: any) {
-    console.error('Failed to save universal database:', err);
+    console.error('[Universal DB] POST error:', err);
     res.status(500).json({ error: 'Failed to save universal database' });
   }
 });
@@ -78,6 +100,7 @@ app.post('/api/database', (req: Request, res: Response) => {
 // 3. Update Arranged Node Positions
 app.patch('/api/database/positions', (req: Request, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache');
     const { positions } = req.body;
     if (!positions || typeof positions !== 'object') {
       return res.status(400).json({ error: 'Invalid positions payload' });
@@ -90,7 +113,7 @@ app.patch('/api/database/positions', (req: Request, res: Response) => {
     saveUniversalDatabase(currentDb);
     res.json({ success: true, node_positions: currentDb.node_positions });
   } catch (err: any) {
-    console.error('Failed to update node positions:', err);
+    console.error('[Universal DB] PATCH error:', err);
     res.status(500).json({ error: 'Failed to update node positions' });
   }
 });
@@ -98,9 +121,12 @@ app.patch('/api/database/positions', (req: Request, res: Response) => {
 // 4. Reset Universal Database to Seed Data
 app.post('/api/database/reset', (_req: Request, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache');
     saveUniversalDatabase(INITIAL_SCRIPTURE_DB);
+    console.log('[Universal DB] Reset database to initial seed');
     res.json({ success: true, database: INITIAL_SCRIPTURE_DB });
   } catch (err: any) {
+    console.error('[Universal DB] Reset error:', err);
     res.status(500).json({ error: 'Failed to reset database' });
   }
 });

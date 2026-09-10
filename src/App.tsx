@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { INITIAL_SCRIPTURE_DB } from './data/initialData';
 import { ScriptureDatabase, Verse, Edge, NodePosition } from './types';
 import { GraphVisualization, SCRIPTURE_THEMES } from './components/GraphVisualization';
@@ -20,6 +20,7 @@ import {
   Move,
   Link2,
   Lock,
+  RefreshCw,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'scripture_graph_database_v1';
@@ -77,34 +78,70 @@ export default function App() {
 
   const savePositionsDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. Fetch Universal Database from Server on Mount
-  // Makes sure whichever device opens the site, it loads the universal JSON file & positions
-  useEffect(() => {
-    let isMounted = true;
-    async function loadUniversalDatabase() {
-      try {
-        setIsLoadingDb(true);
-        const res = await fetch('/api/database');
-        if (res.ok) {
-          const data = await res.json();
-          if (data && Array.isArray(data.verses) && isMounted) {
-            setDatabase(data);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-            } catch (e) {}
-          }
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+
+  // 1. Fetch Universal Database from Server
+  // Makes sure whichever device opens the site, it loads the universal JSON file & positions with fresh cache-busting
+  const loadUniversalDatabase = useCallback(async (silent = false) => {
+    try {
+      if (!silent) setIsLoadingDb(true);
+      const res = await fetch(`/api/database?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.verses) && data.verses.length > 0) {
+          setDatabase(data);
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          } catch (e) {}
+          return data;
         }
-      } catch (err) {
-        console.warn('Could not load universal database from server, using local fallback:', err);
-      } finally {
-        if (isMounted) setIsLoadingDb(false);
+      } else {
+        console.warn(`[Client] Server responded with status ${res.status}`);
       }
+    } catch (err) {
+      console.warn('Could not load universal database from server, using local cache:', err);
+    } finally {
+      if (!silent) setIsLoadingDb(false);
     }
-    loadUniversalDatabase();
-    return () => {
-      isMounted = false;
-    };
+    return null;
   }, []);
+
+  // Fetch universal database on mount
+  useEffect(() => {
+    loadUniversalDatabase();
+  }, [loadUniversalDatabase]);
+
+  // Real-time synchronization across devices:
+  // Polls server every 10 seconds, and immediately re-syncs when the user focuses window or returns to the tab
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadUniversalDatabase(true);
+      }
+    };
+    const handleFocus = () => {
+      loadUniversalDatabase(true);
+    };
+
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocus);
+
+    const intervalId = setInterval(() => {
+      loadUniversalDatabase(true);
+    }, 10000);
+
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(intervalId);
+    };
+  }, [loadUniversalDatabase]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -114,14 +151,30 @@ export default function App() {
   // Persist full database to universal server JSON and local cache
   const persistUniversalDatabase = async (newDb: ScriptureDatabase) => {
     try {
+      // 1. Immediately cache locally
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
-      await fetch('/api/database', {
+
+      // 2. Persist to universal server JSON file so all other devices see it
+      const res = await fetch('/api/database', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store',
+        },
         body: JSON.stringify(newDb),
       });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error('[Client] Server failed to persist database:', res.status, errText);
+        showToast('Notice: Could not save to universal server');
+        return false;
+      }
+      return true;
     } catch (err) {
-      console.error('Failed to persist universal database to server:', err);
+      console.error('[Client] Network error persisting database to server:', err);
+      showToast('Notice: Network error while syncing to universal server');
+      return false;
     }
   };
 
@@ -148,7 +201,7 @@ export default function App() {
       savePositionsDebounceRef.current = setTimeout(() => {
         fetch('/api/database/positions', {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
           body: JSON.stringify({ positions: { [id]: position } }),
         }).catch((err) => console.warn('Failed to save arranged node position:', err));
       }, 250);
@@ -157,95 +210,83 @@ export default function App() {
     });
   };
 
-  const handleCommitBatch = (
+  const handleCommitBatch = async (
     newVerses: Verse[],
     newEdges: Edge[]
   ) => {
-    setDatabase((prev) => {
-      const existingIds = new Set(prev.verses.map((v) => v.id));
-      const freshVerses = newVerses.filter((v) => !existingIds.has(v.id));
+    const existingIds = new Set(database.verses.map((v) => v.id));
+    const freshVerses = newVerses.filter((v) => !existingIds.has(v.id));
 
-      const edgeKey = (e: Edge) => `${e.from}::${e.to}`;
-      const existingEdgeKeys = new Set(prev.edges.map(edgeKey));
-      const freshEdges = newEdges.filter((e) => !existingEdgeKeys.has(edgeKey(e)));
+    const edgeKey = (e: Edge) => `${e.from}::${e.to}`;
+    const existingEdgeKeys = new Set(database.edges.map(edgeKey));
+    const freshEdges = newEdges.filter((e) => !existingEdgeKeys.has(edgeKey(e)));
 
-      const newDb = {
-        ...prev,
-        verses: [...prev.verses, ...freshVerses],
-        edges: [...prev.edges, ...freshEdges],
-      };
-      persistUniversalDatabase(newDb);
-      return newDb;
-    });
-
-    showToast(`Merged ${newVerses.length} verses & ${newEdges.length} connections to universal database.`);
+    const newDb: ScriptureDatabase = {
+      ...database,
+      verses: [...database.verses, ...freshVerses],
+      edges: [...database.edges, ...freshEdges],
+    };
+    setDatabase(newDb);
+    await persistUniversalDatabase(newDb);
+    showToast(`Merged ${freshVerses.length} verses & ${freshEdges.length} connections to universal database.`);
   };
 
   // Direct manipulation connection created on canvas or modal
-  const handleAddEdge = (edge: Edge) => {
-    setDatabase((prev) => {
-      const filtered = prev.edges.filter((e) => !(e.from === edge.from && e.to === edge.to));
-      const newDb = {
-        ...prev,
-        edges: [...filtered, edge],
-      };
-      persistUniversalDatabase(newDb);
-      return newDb;
-    });
+  const handleAddEdge = async (edge: Edge) => {
+    const filtered = database.edges.filter((e) => !(e.from === edge.from && e.to === edge.to));
+    const newDb: ScriptureDatabase = {
+      ...database,
+      edges: [...filtered, edge],
+    };
+    setDatabase(newDb);
+    await persistUniversalDatabase(newDb);
     showToast(`Linked ${edge.from} → ${edge.to} (${edge.relation})`);
   };
 
-  const handleUpdateEdge = (from: string, to: string, updatedWhy: string) => {
-    setDatabase((prev) => {
-      const newDb = {
-        ...prev,
-        edges: prev.edges.map((e) =>
-          e.from === from && e.to === to ? { ...e, why: updatedWhy } : e
-        ),
-      };
-      persistUniversalDatabase(newDb);
-      return newDb;
-    });
+  const handleUpdateEdge = async (from: string, to: string, updatedWhy: string) => {
+    const newDb: ScriptureDatabase = {
+      ...database,
+      edges: database.edges.map((e) =>
+        e.from === from && e.to === to ? { ...e, why: updatedWhy } : e
+      ),
+    };
+    setDatabase(newDb);
+    await persistUniversalDatabase(newDb);
     showToast('Updated connection reasoning');
   };
 
-  const handleDeleteEdge = (from: string, to: string) => {
-    setDatabase((prev) => {
-      const newDb = {
-        ...prev,
-        edges: prev.edges.filter((e) => !(e.from === from && e.to === to)),
-      };
-      persistUniversalDatabase(newDb);
-      return newDb;
-    });
+  const handleDeleteEdge = async (from: string, to: string) => {
+    const newDb: ScriptureDatabase = {
+      ...database,
+      edges: database.edges.filter((e) => !(e.from === from && e.to === to)),
+    };
+    setDatabase(newDb);
+    await persistUniversalDatabase(newDb);
     showToast(`Removed link ${from} → ${to}`);
   };
 
-  const handleAddVerse = (verse: Verse) => {
-    setDatabase((prev) => {
-      const newDb = {
-        ...prev,
-        verses: [...prev.verses, verse],
-      };
-      persistUniversalDatabase(newDb);
-      return newDb;
-    });
+  const handleAddVerse = async (verse: Verse) => {
+    const withoutDuplicate = database.verses.filter((v) => v.id !== verse.id);
+    const newDb: ScriptureDatabase = {
+      ...database,
+      verses: [...withoutDuplicate, verse],
+    };
+    setDatabase(newDb);
+    await persistUniversalDatabase(newDb);
     showToast(`Added ${verse.id} to universal database`);
   };
 
-  const handleDeleteVerse = (verseId: string) => {
-    setDatabase((prev) => {
-      const updatedPositions = { ...(prev.node_positions || {}) };
-      delete updatedPositions[verseId];
-      const newDb = {
-        ...prev,
-        verses: prev.verses.filter((v) => v.id !== verseId),
-        edges: prev.edges.filter((e) => e.from !== verseId && e.to !== verseId),
-        node_positions: updatedPositions,
-      };
-      persistUniversalDatabase(newDb);
-      return newDb;
-    });
+  const handleDeleteVerse = async (verseId: string) => {
+    const updatedPositions = { ...(database.node_positions || {}) };
+    delete updatedPositions[verseId];
+    const newDb: ScriptureDatabase = {
+      ...database,
+      verses: database.verses.filter((v) => v.id !== verseId),
+      edges: database.edges.filter((e) => e.from !== verseId && e.to !== verseId),
+      node_positions: updatedPositions,
+    };
+    setDatabase(newDb);
+    await persistUniversalDatabase(newDb);
     showToast(`Deleted ${verseId} from universal database`);
   };
 
@@ -486,6 +527,23 @@ export default function App() {
             {/* Tools */}
             <div className="pt-2 border-t border-white/10 space-y-1">
               <button
+                onClick={async () => {
+                  setIsSyncing(true);
+                  await loadUniversalDatabase(false);
+                  setIsSyncing(false);
+                  showToast('Universal constellation synchronized');
+                }}
+                className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
+                title="Force refresh database and node positions directly from universal server"
+              >
+                <span className="flex items-center gap-2">
+                  <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>Sync with Server</span>
+                </span>
+                <span className="font-mono text-[10px] text-stone-500">Live</span>
+              </button>
+
+              <button
                 onClick={() => {
                   setIsBatchProposerOpen(true);
                   setIsMenuOpen(false);
@@ -637,9 +695,10 @@ export default function App() {
       {/* AUTHENTICATION GATE: ADMIN / 10509 REQUIRED TO ENTER THE SITE */}
       <LoginModal
         isOpen={!isAuthenticated}
-        onLoginSuccess={() => {
+        onLoginSuccess={async () => {
           setIsAuthenticated(true);
-          showToast('Welcome, admin');
+          await loadUniversalDatabase(false);
+          showToast('Welcome, admin. Synced universal constellation.');
         }}
       />
     </div>
