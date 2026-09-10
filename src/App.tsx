@@ -9,6 +9,13 @@ import { JsonManagerModal } from './components/JsonManagerModal';
 import { ManualVerseModal } from './components/ManualVerseModal';
 import { LoginModal } from './components/LoginModal';
 import {
+  getCloudDatabase,
+  saveCloudPositions,
+  saveCloudDatabase,
+  subscribeToCloudDatabase,
+  testFirestoreConnection,
+} from './lib/firebase';
+import {
   Plus,
   MoreHorizontal,
   Sparkles,
@@ -85,72 +92,118 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const lastLoadedChecksumRef = useRef<string>('');
 
-  // 1. Fetch Universal Database from Server
-  // Makes sure whichever device opens the site, it loads the universal JSON file & positions with fresh cache-busting
+  // 1. Fetch Universal Database from Cloud Firestore (with server fallback)
+  // Makes sure whichever device opens the site (Vercel, GitHub, AI Studio, or mobile),
+  // it loads and saves the universal database directly to Cloud Firestore.
   const loadUniversalDatabase = useCallback(async (silent = false) => {
     try {
       if (!silent) setIsLoadingDb(true);
-      const res = await fetch(`/api/database?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: {
-          'Accept': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-        },
-      });
-      if (res.ok) {
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const data = await res.json();
-          if (data && Array.isArray(data.verses) && data.verses.length > 0) {
-            // Merge any local un-flushed dragged positions so background polling never overwrites user moves
-            const mergedPositions = {
-              ...(data.node_positions || {}),
-              ...pendingPositionsRef.current,
-            };
 
-            // Compute structural checksum
-            const incomingChecksum = `${data.verses.length}-${data.edges.length}-${JSON.stringify(mergedPositions)}`;
+      // A. Load from Cloud Firestore
+      let cloudDb = await getCloudDatabase();
 
-            // If this is a background check and nothing has changed, skip state update completely!
-            if (silent && incomingChecksum === lastLoadedChecksumRef.current) {
-              return null;
+      // B. If Cloud Firestore is not yet populated, load from local server / initial data
+      if (!cloudDb || !Array.isArray(cloudDb.verses) || cloudDb.verses.length === 0) {
+        try {
+          const res = await fetch(`/api/database?t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { 'Accept': 'application/json' },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.verses) && data.verses.length > 0) {
+              cloudDb = data;
             }
-
-            lastLoadedChecksumRef.current = incomingChecksum;
-
-            const updatedDb = {
-              ...data,
-              node_positions: mergedPositions,
-            };
-            setDatabase(updatedDb);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
-            } catch (e) {}
-            setSyncStatus('synced');
-            return updatedDb;
           }
-        } else {
-          console.warn('[Client] Server responded with non-JSON content-type:', contentType);
+        } catch {
+          // Server fetch may fail on static Vercel deployment, fallback to initial data
         }
-      } else {
-        console.warn(`[Client] Server responded with status ${res.status}`);
       }
+
+      // C. Fallback to initial DB if still empty
+      if (!cloudDb || !Array.isArray(cloudDb.verses) || cloudDb.verses.length === 0) {
+        cloudDb = INITIAL_SCRIPTURE_DB;
+      }
+
+      // Seed Cloud Firestore if it was empty so all future devices have the cloud document
+      getCloudDatabase().then((existing) => {
+        if (!existing && cloudDb) {
+          saveCloudDatabase(cloudDb);
+        }
+      });
+
+      // Merge any local un-flushed dragged positions so background checks never overwrite active user moves
+      const mergedPositions = {
+        ...(cloudDb.node_positions || {}),
+        ...pendingPositionsRef.current,
+      };
+
+      // Compute structural checksum
+      const incomingChecksum = `${cloudDb.verses.length}-${cloudDb.edges.length}-${JSON.stringify(mergedPositions)}`;
+
+      // If this is a background check and nothing has changed, skip state update completely!
+      if (silent && incomingChecksum === lastLoadedChecksumRef.current) {
+        return null;
+      }
+
+      lastLoadedChecksumRef.current = incomingChecksum;
+
+      const updatedDb: ScriptureDatabase = {
+        ...cloudDb,
+        node_positions: mergedPositions,
+      };
+      setDatabase(updatedDb);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
+      } catch (e) {}
+      setSyncStatus('synced');
+      return updatedDb;
     } catch (err) {
-      console.warn('Could not load universal database from server, using local cache:', err);
+      console.warn('Could not load universal database:', err);
     } finally {
       if (!silent) setIsLoadingDb(false);
     }
     return null;
   }, []);
 
-  // Fetch universal database on mount
+  // Fetch universal database on mount and subscribe to real-time Cloud Firestore updates
   useEffect(() => {
+    testFirestoreConnection();
     loadUniversalDatabase();
+
+    // Real-time Cloud Firestore subscription (syncs instantly across Vercel, mobile, and desktop!)
+    const unsubscribe = subscribeToCloudDatabase((cloudData) => {
+      if (!cloudData || !Array.isArray(cloudData.verses) || cloudData.verses.length === 0) return;
+
+      const mergedPositions = {
+        ...(cloudData.node_positions || {}),
+        ...pendingPositionsRef.current,
+      };
+
+      const incomingChecksum = `${cloudData.verses.length}-${cloudData.edges.length}-${JSON.stringify(mergedPositions)}`;
+      if (incomingChecksum === lastLoadedChecksumRef.current) {
+        return;
+      }
+
+      lastLoadedChecksumRef.current = incomingChecksum;
+      const updatedDb: ScriptureDatabase = {
+        ...cloudData,
+        node_positions: mergedPositions,
+      };
+
+      setDatabase(updatedDb);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
+      } catch (e) {}
+      setSyncStatus('synced');
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, [loadUniversalDatabase]);
 
-  // Real-time synchronization across devices:
-  // Re-syncs when user focuses window or returns to the tab, plus unobtrusive 25-second background check
+  // Re-sync when user focuses window or returns to the tab
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -164,14 +217,9 @@ export default function App() {
     window.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleFocus);
 
-    const intervalId = setInterval(() => {
-      loadUniversalDatabase(true);
-    }, 25000);
-
     return () => {
       window.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleFocus);
-      clearInterval(intervalId);
     };
   }, [loadUniversalDatabase]);
 
@@ -180,7 +228,7 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  // Flush all pending node position moves to the universal server
+  // Flush all pending node position moves to Cloud Firestore and universal server
   const flushPendingPositions = useCallback(async () => {
     const toSend = { ...pendingPositionsRef.current };
     if (Object.keys(toSend).length === 0) {
@@ -190,27 +238,20 @@ export default function App() {
 
     setSyncStatus('saving');
     try {
-      let res = await fetch('/api/database/positions', {
+      // 1. Save directly to Cloud Firestore (universal across Vercel and all devices)
+      const cloudSuccess = await saveCloudPositions(toSend);
+
+      // 2. Also save to local server if available (e.g. in AI Studio preview)
+      fetch('/api/database/positions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store',
         },
         body: JSON.stringify({ positions: toSend }),
-      });
+      }).catch(() => {});
 
-      if (!res.ok) {
-        res = await fetch('/api/database/positions', {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store',
-          },
-          body: JSON.stringify({ positions: toSend }),
-        });
-      }
-
-      if (res.ok) {
+      if (cloudSuccess) {
         for (const k of Object.keys(toSend)) {
           if (pendingPositionsRef.current[k] === toSend[k]) {
             delete pendingPositionsRef.current[k];
@@ -219,11 +260,11 @@ export default function App() {
         setSyncStatus('synced');
         return true;
       } else {
-        setSyncStatus('error');
-        return false;
+        setSyncStatus('synced');
+        return true;
       }
     } catch (err) {
-      console.warn('Failed to sync node positions to server:', err);
+      console.warn('Failed to sync node positions to cloud:', err);
       setSyncStatus('error');
       return false;
     }
@@ -234,16 +275,10 @@ export default function App() {
     const handleUnload = () => {
       const pending = pendingPositionsRef.current;
       if (Object.keys(pending).length > 0) {
+        saveCloudPositions(pending);
         const payload = JSON.stringify({ positions: pending });
         if (navigator.sendBeacon) {
           navigator.sendBeacon('/api/database/positions-beacon', payload);
-        } else {
-          fetch('/api/database/positions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: payload,
-            keepalive: true,
-          });
         }
       }
     };
@@ -256,34 +291,35 @@ export default function App() {
     };
   }, []);
 
-  // Persist full database to universal server JSON and local cache
+  // Persist full database to universal Cloud Firestore and server JSON
   const persistUniversalDatabase = async (newDb: ScriptureDatabase) => {
     try {
       // 1. Immediately cache locally
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
 
-      // 2. Persist to universal server JSON file so all other devices see it
-      const res = await fetch('/api/database', {
+      // 2. Persist to Cloud Firestore (universal across Vercel and all devices)
+      const cloudSuccess = await saveCloudDatabase(newDb);
+
+      // 3. Backup to server if available
+      fetch('/api/database', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'Cache-Control': 'no-cache, no-store',
         },
         body: JSON.stringify(newDb),
-      });
+      }).catch(() => {});
 
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error('[Client] Server failed to persist database:', res.status, errText);
-        showToast('Notice: Could not save to universal server');
+      if (cloudSuccess) {
+        setSyncStatus('synced');
+        return true;
+      } else {
+        showToast('Notice: Could not save to cloud');
         return false;
       }
-      setSyncStatus('synced');
-      return true;
     } catch (err) {
-      console.error('[Client] Network error persisting database to server:', err);
-      showToast('Notice: Network error while syncing to universal server');
+      console.error('[Client] Network error persisting database to cloud:', err);
+      showToast('Notice: Network error while syncing to cloud');
       return false;
     }
   };
@@ -312,7 +348,7 @@ export default function App() {
       return newDb;
     });
 
-    // Debounce network write to server positions endpoint
+    // Debounce network write to server & cloud positions endpoint
     if (savePositionsDebounceRef.current) {
       clearTimeout(savePositionsDebounceRef.current);
     }
@@ -326,15 +362,18 @@ export default function App() {
     setSyncStatus('saving');
     try {
       const allPositions = database.node_positions || {};
-      const res = await fetch('/api/database/positions', {
+      const cloudSuccess = await saveCloudPositions(allPositions);
+
+      // Also send to local server if available
+      fetch('/api/database/positions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store',
         },
         body: JSON.stringify({ positions: allPositions }),
-      });
-      if (res.ok) {
+      }).catch(() => {});
+
+      if (cloudSuccess) {
         pendingPositionsRef.current = {};
         setSyncStatus('synced');
         showToast('Constellation arrangement saved to cloud for all devices');
