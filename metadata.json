@@ -1,0 +1,6 @@
+{
+  "name": "Scripture Graph Database Builder",
+  "description": "Interactive graph database and scholar tool for mapping verses and argumentative connections across Marathi Sant Sahitya, Dasbodh, Manache Shlok, and classical Sanskrit scriptures.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
