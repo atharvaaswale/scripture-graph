@@ -29,7 +29,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // --- UNIVERSAL DATABASE PERSISTENCE ON DISK ---
 // Stored in data/universal_database.json so every device connects to the exact same dataset & positions
-const DATA_DIR = path.resolve(__dirname, 'data');
+const DATA_DIR = path.resolve(process.cwd(), 'data');
 const UNIVERSAL_DB_FILE = path.resolve(DATA_DIR, 'universal_database.json');
 
 function ensureUniversalDatabase(): any {
@@ -117,12 +117,18 @@ app.post('/api/database', (req: Request, res: Response) => {
   }
 });
 
-// 3. Update Arranged Node Positions
-app.patch('/api/database/positions', (req: Request, res: Response) => {
+// 3. Update Arranged Node Positions (Supports PATCH, POST, and beacon)
+const handlePositionsUpdate = (req: Request, res: Response) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache');
-    const { positions } = req.body;
-    if (!positions || typeof positions !== 'object') {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {}
+    }
+    const positions = body?.positions || body;
+    if (!positions || typeof positions !== 'object' || Array.isArray(positions)) {
       return res.status(400).json({ error: 'Invalid positions payload' });
     }
     const currentDb = ensureUniversalDatabase();
@@ -131,12 +137,17 @@ app.patch('/api/database/positions', (req: Request, res: Response) => {
       ...positions,
     };
     saveUniversalDatabase(currentDb);
-    res.json({ success: true, node_positions: currentDb.node_positions });
+    console.log(`[Universal DB] Updated ${Object.keys(positions).length} node positions on universal storage`);
+    res.json({ success: true, updatedCount: Object.keys(positions).length, node_positions: currentDb.node_positions });
   } catch (err: any) {
-    console.error('[Universal DB] PATCH error:', err);
+    console.error('[Universal DB] positions update error:', err);
     res.status(500).json({ error: 'Failed to update node positions' });
   }
-});
+};
+
+app.patch('/api/database/positions', handlePositionsUpdate);
+app.post('/api/database/positions', handlePositionsUpdate);
+app.post('/api/database/positions-beacon', handlePositionsUpdate);
 
 // 4. Reset Universal Database to Seed Data
 app.post('/api/database/reset', (_req: Request, res: Response) => {

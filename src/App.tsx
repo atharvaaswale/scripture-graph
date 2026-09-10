@@ -21,6 +21,8 @@ import {
   Link2,
   Lock,
   RefreshCw,
+  AlertCircle,
+  Save,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'scripture_graph_database_v1';
@@ -77,6 +79,8 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const savePositionsDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingPositionsRef = useRef<Record<string, NodePosition>>({});
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'saving' | 'error'>('synced');
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
@@ -99,11 +103,20 @@ export default function App() {
         if (contentType.includes('application/json')) {
           const data = await res.json();
           if (data && Array.isArray(data.verses) && data.verses.length > 0) {
-            setDatabase(data);
+            // Merge any local un-flushed dragged positions so background polling never overwrites user moves
+            const mergedPositions = {
+              ...(data.node_positions || {}),
+              ...pendingPositionsRef.current,
+            };
+            const updatedDb = {
+              ...data,
+              node_positions: mergedPositions,
+            };
+            setDatabase(updatedDb);
             try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
             } catch (e) {}
-            return data;
+            return updatedDb;
           }
         } else {
           console.warn('[Client] Server responded with non-JSON content-type:', contentType);
@@ -155,6 +168,73 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
+  // Flush all pending node position moves to the universal server
+  const flushPendingPositions = useCallback(async () => {
+    const toSend = { ...pendingPositionsRef.current };
+    if (Object.keys(toSend).length === 0) {
+      setSyncStatus('synced');
+      return true;
+    }
+
+    setSyncStatus('saving');
+    try {
+      const res = await fetch('/api/database/positions', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store',
+        },
+        body: JSON.stringify({ positions: toSend }),
+      });
+
+      if (res.ok) {
+        for (const k of Object.keys(toSend)) {
+          if (pendingPositionsRef.current[k] === toSend[k]) {
+            delete pendingPositionsRef.current[k];
+          }
+        }
+        setSyncStatus('synced');
+        return true;
+      } else {
+        setSyncStatus('error');
+        return false;
+      }
+    } catch (err) {
+      console.warn('Failed to sync node positions to server:', err);
+      setSyncStatus('error');
+      return false;
+    }
+  }, []);
+
+  // Guarantee all pending positions are sent when user closes tab or navigates away
+  useEffect(() => {
+    const handleUnload = () => {
+      const pending = pendingPositionsRef.current;
+      if (Object.keys(pending).length > 0) {
+        const payload = JSON.stringify({ positions: pending });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/database/positions-beacon', payload);
+        } else {
+          fetch('/api/database/positions', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+            keepalive: true,
+          });
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+    };
+  }, []);
+
   // Persist full database to universal server JSON and local cache
   const persistUniversalDatabase = async (newDb: ScriptureDatabase) => {
     try {
@@ -179,6 +259,7 @@ export default function App() {
         showToast('Notice: Could not save to universal server');
         return false;
       }
+      setSyncStatus('synced');
       return true;
     } catch (err) {
       console.error('[Client] Network error persisting database to server:', err);
@@ -189,6 +270,9 @@ export default function App() {
 
   // Remember how user arranged nodes
   const handleSaveNodePosition = (id: string, position: NodePosition) => {
+    pendingPositionsRef.current[id] = position;
+    setSyncStatus('saving');
+
     setDatabase((prev) => {
       const updatedPositions = {
         ...(prev.node_positions || {}),
@@ -203,21 +287,44 @@ export default function App() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
       } catch (e) {}
 
-      // Debounce network write to server positions endpoint
-      if (savePositionsDebounceRef.current) {
-        clearTimeout(savePositionsDebounceRef.current);
-      }
-      savePositionsDebounceRef.current = setTimeout(() => {
-        fetch('/api/database/positions', {
-          method: 'PATCH',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-          body: JSON.stringify({ positions: { [id]: position } }),
-        }).catch((err) => console.warn('Failed to save arranged node position:', err));
-      }, 250);
-
       return newDb;
     });
+
+    // Debounce network write to server positions endpoint
+    if (savePositionsDebounceRef.current) {
+      clearTimeout(savePositionsDebounceRef.current);
+    }
+    savePositionsDebounceRef.current = setTimeout(() => {
+      flushPendingPositions();
+    }, 250);
+  };
+
+  // Manual explicit save to cloud layout
+  const handleManualSaveLayout = async () => {
+    setSyncStatus('saving');
+    try {
+      const allPositions = database.node_positions || {};
+      const res = await fetch('/api/database/positions', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store',
+        },
+        body: JSON.stringify({ positions: allPositions }),
+      });
+      if (res.ok) {
+        pendingPositionsRef.current = {};
+        setSyncStatus('synced');
+        showToast('Constellation arrangement saved to cloud for all devices');
+      } else {
+        setSyncStatus('error');
+        showToast('Could not save layout to cloud');
+      }
+    } catch {
+      setSyncStatus('error');
+      showToast('Network error saving arrangement');
+    }
   };
 
   const handleCommitBatch = async (
@@ -397,6 +504,37 @@ export default function App() {
           )}
         </button>
 
+        {/* Cloud Sync Status / Save Layout Button */}
+        <button
+          id="btn-sync-cloud-layout"
+          onClick={handleManualSaveLayout}
+          className={`h-9 px-3 rounded-full flex items-center gap-1.5 text-xs font-mono transition-all border backdrop-blur-md active:scale-95 ${
+            syncStatus === 'saving'
+              ? 'bg-amber-500/20 border-amber-400/50 text-amber-300'
+              : syncStatus === 'error'
+              ? 'bg-red-500/20 border-red-400/50 text-red-300'
+              : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+          }`}
+          title="Arrangements are automatically saved to the cloud across devices. Click anytime to re-sync immediately."
+        >
+          {syncStatus === 'saving' ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+              <span className="hidden sm:inline">Saving...</span>
+            </>
+          ) : syncStatus === 'error' ? (
+            <>
+              <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+              <span className="hidden sm:inline">Retry Sync</span>
+            </>
+          ) : (
+            <>
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Cloud Synced</span>
+            </>
+          )}
+        </button>
+
         <button
           id="btn-main-menu"
           onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -551,6 +689,21 @@ export default function App() {
                   <span>Sync with Server</span>
                 </span>
                 <span className="font-mono text-[10px] text-stone-500">Live</span>
+              </button>
+
+              <button
+                onClick={async () => {
+                  await handleManualSaveLayout();
+                  setIsMenuOpen(false);
+                }}
+                className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
+                title="Save current constellation coordinates to cloud so all devices stay identical"
+              >
+                <span className="flex items-center gap-2">
+                  <Save className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Save Layout to Cloud</span>
+                </span>
+                <span className="font-mono text-[10px] text-stone-500">Sync</span>
               </button>
 
               <button

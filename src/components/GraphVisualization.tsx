@@ -278,6 +278,25 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     setPointerPos((prev) => ({ ...prev, visible: false }));
   }, []);
 
+  // Helper: calculate curved bezier path between node coordinates
+  const getCurvedPath = useCallback((d: any) => {
+    const sx = typeof d.source === 'object' ? (d.source.x ?? 0) : 0;
+    const sy = typeof d.source === 'object' ? (d.source.y ?? 0) : 0;
+    const tx = typeof d.target === 'object' ? (d.target.x ?? 0) : 0;
+    const ty = typeof d.target === 'object' ? (d.target.y ?? 0) : 0;
+
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return `M${sx},${sy} L${tx},${ty}`;
+
+    const curvature = 0.12;
+    const mx = (sx + tx) / 2 - (dy / dist) * (dist * curvature);
+    const my = (sy + ty) / 2 + (dx / dist) * (dist * curvature);
+
+    return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
+  }, []);
+
   // 1. MAIN GRAPH INITIALIZATION
   // Runs only when verses/edges change, NOT on node click selection!
   useEffect(() => {
@@ -589,22 +608,38 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     // Prepare simulation nodes with user-saved coordinates or defaults
     const savedPositions = nodePositions || {};
     const existingNodeMap = new Map<string, GraphNode>(nodesRef.current.map((n) => [n.id, n]));
-    const nodes: GraphNode[] = filteredVerses.map((v) => {
+    const nodes: GraphNode[] = filteredVerses.map((v, i) => {
       const existing = existingNodeMap.get(v.id);
       const saved = savedPositions[v.id];
       const hint = INITIAL_COORDS[v.id];
-      const posX = saved?.x ?? existing?.x ?? hint?.x ?? (Math.random() - 0.5) * 160;
-      const posY = saved?.y ?? existing?.y ?? hint?.y ?? (Math.random() - 0.5) * 160;
-      const fixX = saved?.fx !== undefined ? (saved.fx ?? undefined) : (existing?.fx ?? hint?.x);
-      const fixY = saved?.fy !== undefined ? (saved.fy ?? undefined) : (existing?.fy ?? hint?.y);
+
+      let posX: number;
+      let posY: number;
+      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
+        posX = Math.round(saved.x);
+        posY = Math.round(saved.y);
+      } else if (existing && typeof existing.x === 'number' && typeof existing.y === 'number') {
+        posX = Math.round(existing.x);
+        posY = Math.round(existing.y);
+      } else if (hint) {
+        posX = hint.x;
+        posY = hint.y;
+      } else {
+        // Deterministic, harmonious spiral constellation placement for any new nodes
+        const angle = (i * 137.5 * Math.PI) / 180;
+        const dist = 180 + Math.sqrt(i) * 45;
+        posX = Math.round(Math.cos(angle) * dist);
+        posY = Math.round(Math.sin(angle) * dist);
+      }
+
       return {
         id: v.id,
         verse: v,
         radius: 20,
         x: posX,
         y: posY,
-        fx: fixX,
-        fy: fixY,
+        fx: posX, // PINNED: Preserves user arrangement across all devices & prevents simulation drift
+        fy: posY, // PINNED: Preserves user arrangement across all devices & prevents simulation drift
         vx: 0,
         vy: 0,
       };
@@ -618,7 +653,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       why: e.why,
     }));
 
-    // Bounded, balanced constellation simulation
+    // Bounded constellation simulation: nodes are pinned to their arranged coordinates,
+    // so forces resolve link endpoints without overriding user-placed coordinates!
     const simulation = d3
       .forceSimulation<GraphNode>(nodes)
       .force(
@@ -627,20 +663,9 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
           .forceLink<GraphNode, GraphLink>(links)
           .id((d) => d.id)
           .distance(115)
-          .strength(0.6)
+          .strength(0)
       )
-      .force(
-        'charge',
-        d3
-          .forceManyBody<GraphNode>()
-          .strength(-85)
-          .distanceMax(220) // Capped so distant nodes NEVER repel indefinitely
-      )
-      .force('collide', d3.forceCollide<GraphNode>().radius(38).strength(0.95))
-      .force('x', d3.forceX(0).strength(0.06))
-      .force('y', d3.forceY(0).strength(0.06))
-      .velocityDecay(0.4)
-      .alphaDecay(0.035);
+      .alphaDecay(0.05);
 
     simulationRef.current = simulation;
 
@@ -744,25 +769,6 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         });
         setEditingWhy(d.why || '');
       });
-
-    // Helper: calculate curved bezier path
-    const getCurvedPath = (d: any) => {
-      const sx = d.source.x;
-      const sy = d.source.y;
-      const tx = d.target.x;
-      const ty = d.target.y;
-
-      const dx = tx - sx;
-      const dy = ty - sy;
-      const dist = Math.hypot(dx, dy);
-      if (dist === 0) return `M${sx},${sy} L${tx},${ty}`;
-
-      const curvature = 0.12;
-      const mx = (sx + tx) / 2 - (dy / dist) * (dist * curvature);
-      const my = (sy + ty) / 2 + (dx / dist) * (dist * curvature);
-
-      return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
-    };
 
     // --- 6. DRAW 3D SPHERICAL NODES (EXACT REPLICA OF IMAGE.PNG) ---
     const node = nodesGroup
@@ -974,38 +980,52 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
 
       const moveDrag = d3
         .drag<SVGGElement, GraphNode>()
-        .on('start', (event, d) => {
+        .on('start', (_event, d) => {
           hasDraggedNode = false;
-          if (!event.active) simulation.alphaTarget(0.2).restart();
           d.fx = d.x;
           d.fy = d.y;
         })
-        .on('drag', (event, d) => {
+        .on('drag', function (event, d) {
           hasDraggedNode = true;
-          d.fx = event.x;
-          d.fy = event.y;
-          d.x = event.x;
-          d.y = event.y;
+          const newX = event.x;
+          const newY = event.y;
+          d.fx = newX;
+          d.fy = newY;
+          d.x = newX;
+          d.y = newY;
+
+          // Directly update the visual transform of the dragged node
+          d3.select(this).attr('transform', `translate(${newX},${newY})`);
+
+          // Update connecting links to this node immediately
+          link
+            .filter((l: any) => {
+              const sId = typeof l.source === 'object' ? l.source.id : l.source;
+              const tId = typeof l.target === 'object' ? l.target.id : l.target;
+              return sId === d.id || tId === d.id;
+            })
+            .attr('d', getCurvedPath);
         })
-        .on('end', (event, d) => {
-          if (!event.active) simulation.alphaTarget(0);
+        .on('end', (_event, d) => {
           if (hasDraggedNode) {
             dragJustEndedRef.current = true;
             setTimeout(() => {
               dragJustEndedRef.current = false;
             }, 250);
-            // Pin node right where user placed it so it stays there!
-            d.fx = event.x;
-            d.fy = event.y;
-            d.x = event.x;
-            d.y = event.y;
+
+            const roundedX = Math.round(d.x ?? 0);
+            const roundedY = Math.round(d.y ?? 0);
+            d.fx = roundedX;
+            d.fy = roundedY;
+            d.x = roundedX;
+            d.y = roundedY;
 
             // Persist arranged position to universal JSON database!
             onSaveNodePositionRef.current?.(d.id, {
-              x: event.x,
-              y: event.y,
-              fx: event.x,
-              fy: event.y,
+              x: roundedX,
+              y: roundedY,
+              fx: roundedX,
+              fy: roundedY,
             });
           }
         });
@@ -1025,6 +1045,11 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       link.attr('d', getCurvedPath);
       node.attr('transform', (d) => `translate(${d.x},${d.y})`);
     });
+
+    // Initial render tick to guarantee exact positioning instantly
+    simulation.tick();
+    link.attr('d', getCurvedPath);
+    node.attr('transform', (d) => `translate(${d.x},${d.y})`);
 
     // --- 6. SOFT STARLIGHT-GOLD CURSOR TRACKER (SCREEN-SPACE, DESKTOP ONLY) ---
     const cursorTracker = svg
@@ -1066,7 +1091,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [filteredVerses, filteredEdges, isCuratorMode, numeralMode, nodePositions]);
+  }, [filteredVerses, filteredEdges, isCuratorMode, numeralMode, getCurvedPath]);
 
   // 2. LIGHTWEIGHT SELECTION UPDATE EFFECT
   // Updates stroke highlights without rebuilding the SVG, restarting simulation, or moving nodes!
@@ -1097,6 +1122,39 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         .attr('stroke-opacity', !selectedVerseId || isConnected ? 0.75 : 0.2);
     });
   }, [selectedVerseId, activeChainVerseIds]);
+
+  // 3. EXTERNAL POSITION SYNCHRONIZATION EFFECT
+  // When nodePositions updates from server or another device, smoothly reposition the nodes without rebuilding DOM
+  useEffect(() => {
+    if (!svgRef.current || !nodePositions) return;
+    const svg = d3.select(svgRef.current);
+    let hasMoved = false;
+
+    nodesRef.current.forEach((n) => {
+      const saved = nodePositions[n.id];
+      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
+        const roundedSavedX = Math.round(saved.x);
+        const roundedSavedY = Math.round(saved.y);
+        const currentX = Math.round(n.x ?? 0);
+        const currentY = Math.round(n.y ?? 0);
+
+        if (currentX !== roundedSavedX || currentY !== roundedSavedY) {
+          n.x = roundedSavedX;
+          n.y = roundedSavedY;
+          n.fx = roundedSavedX;
+          n.fy = roundedSavedY;
+          hasMoved = true;
+
+          svg.select<SVGGElement>(`[id="node-${n.id}"]`)
+            .attr('transform', `translate(${roundedSavedX},${roundedSavedY})`);
+        }
+      }
+    });
+
+    if (hasMoved) {
+      svg.selectAll<SVGPathElement, GraphLink>('path.constellation-link').attr('d', getCurvedPath);
+    }
+  }, [nodePositions, getCurvedPath]);
 
   // Zoom control helpers
   const handleResetZoom = () => {
