@@ -223,8 +223,16 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     );
   }, [edges, activeRelations, filteredVerseIdSet]);
 
+  // Stable key: only changes when actual verses or edges are added/removed/filtered
+  const structureKey = useMemo(() => {
+    const vKey = filteredVerses.map((v) => v.id).sort().join(',');
+    const eKey = filteredEdges.map((e) => `${e.from}->${e.to}:${e.relation}`).sort().join(',');
+    return `${vKey}::${eKey}`;
+  }, [filteredVerses, filteredEdges]);
+
   // Keep simulation nodes cache
   const nodesRef = useRef<GraphNode[]>([]);
+  const targetPosMapRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   // Selection refs to allow event listeners without restarting force simulation
   const selectedVerseIdRef = useRef(selectedVerseId);
@@ -608,6 +616,9 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     // Prepare simulation nodes with user-saved coordinates or defaults
     const savedPositions = nodePositions || {};
     const existingNodeMap = new Map<string, GraphNode>(nodesRef.current.map((n) => [n.id, n]));
+    const targetPosMap = targetPosMapRef.current;
+    targetPosMap.clear();
+
     const nodes: GraphNode[] = filteredVerses.map((v, i) => {
       const existing = existingNodeMap.get(v.id);
       const saved = savedPositions[v.id];
@@ -632,14 +643,16 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         posY = Math.round(Math.sin(angle) * dist);
       }
 
+      targetPosMap.set(v.id, { x: posX, y: posY });
+
       return {
         id: v.id,
         verse: v,
         radius: 20,
         x: posX,
         y: posY,
-        fx: posX, // PINNED: Preserves user arrangement across all devices & prevents simulation drift
-        fy: posY, // PINNED: Preserves user arrangement across all devices & prevents simulation drift
+        fx: posX, // Pin node to user-arranged coordinates to prevent drift and glitchy snapbacks
+        fy: posY,
         vx: 0,
         vy: 0,
       };
@@ -653,8 +666,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       why: e.why,
     }));
 
-    // Bounded constellation simulation: nodes are pinned to their arranged coordinates,
-    // so forces resolve link endpoints without overriding user-placed coordinates!
+    // Bounded constellation simulation: nodes are firmly positioned at arranged coordinates,
+    // simulation resolves links cleanly without overriding user placements
     const simulation = d3
       .forceSimulation<GraphNode>(nodes)
       .force(
@@ -994,7 +1007,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
           d.x = newX;
           d.y = newY;
 
-          // Directly update the visual transform of the dragged node
+          // Directly update the visual transform of the dragged node for instant smooth tracking
           d3.select(this).attr('transform', `translate(${newX},${newY})`);
 
           // Update connecting links to this node immediately
@@ -1006,19 +1019,20 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
             })
             .attr('d', getCurvedPath);
         })
-        .on('end', (_event, d) => {
+        .on('end', (event, d) => {
           if (hasDraggedNode) {
             dragJustEndedRef.current = true;
             setTimeout(() => {
               dragJustEndedRef.current = false;
             }, 250);
 
-            const roundedX = Math.round(d.x ?? 0);
-            const roundedY = Math.round(d.y ?? 0);
-            d.fx = roundedX;
-            d.fy = roundedY;
+            const roundedX = Math.round(event.x);
+            const roundedY = Math.round(event.y);
             d.x = roundedX;
             d.y = roundedY;
+            d.fx = roundedX;
+            d.fy = roundedY;
+            targetPosMapRef.current.set(d.id, { x: roundedX, y: roundedY });
 
             // Persist arranged position to universal JSON database!
             onSaveNodePositionRef.current?.(d.id, {
@@ -1027,6 +1041,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
               fx: roundedX,
               fy: roundedY,
             });
+
+            link.attr('d', getCurvedPath);
           }
         });
 
@@ -1091,7 +1107,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [filteredVerses, filteredEdges, isCuratorMode, numeralMode, getCurvedPath]);
+  }, [structureKey, isCuratorMode, numeralMode, getCurvedPath]);
 
   // 2. LIGHTWEIGHT SELECTION UPDATE EFFECT
   // Updates stroke highlights without rebuilding the SVG, restarting simulation, or moving nodes!
@@ -1124,7 +1140,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   }, [selectedVerseId, activeChainVerseIds]);
 
   // 3. EXTERNAL POSITION SYNCHRONIZATION EFFECT
-  // When nodePositions updates from server or another device, smoothly reposition the nodes without rebuilding DOM
+  // When nodePositions updates from server or another device, smoothly reposition nodes without rebuilding DOM or restarting simulation
   useEffect(() => {
     if (!svgRef.current || !nodePositions) return;
     const svg = d3.select(svgRef.current);
@@ -1138,14 +1154,16 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
         const currentX = Math.round(n.x ?? 0);
         const currentY = Math.round(n.y ?? 0);
 
-        if (currentX !== roundedSavedX || currentY !== roundedSavedY) {
+        // Only reposition if position actually changed by more than 3px (e.g. from another device)
+        if (Math.abs(currentX - roundedSavedX) > 3 || Math.abs(currentY - roundedSavedY) > 3) {
           n.x = roundedSavedX;
           n.y = roundedSavedY;
           n.fx = roundedSavedX;
           n.fy = roundedSavedY;
           hasMoved = true;
 
-          svg.select<SVGGElement>(`[id="node-${n.id}"]`)
+          svg
+            .select<SVGGElement>(`[id="node-${n.id}"]`)
             .attr('transform', `translate(${roundedSavedX},${roundedSavedY})`);
         }
       }

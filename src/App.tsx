@@ -83,6 +83,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<'synced' | 'saving' | 'error'>('synced');
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const lastLoadedChecksumRef = useRef<string>('');
 
   // 1. Fetch Universal Database from Server
   // Makes sure whichever device opens the site, it loads the universal JSON file & positions with fresh cache-busting
@@ -91,7 +92,6 @@ export default function App() {
       if (!silent) setIsLoadingDb(true);
       const res = await fetch(`/api/database?t=${Date.now()}`, {
         cache: 'no-store',
-        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -108,6 +108,17 @@ export default function App() {
               ...(data.node_positions || {}),
               ...pendingPositionsRef.current,
             };
+
+            // Compute structural checksum
+            const incomingChecksum = `${data.verses.length}-${data.edges.length}-${JSON.stringify(mergedPositions)}`;
+
+            // If this is a background check and nothing has changed, skip state update completely!
+            if (silent && incomingChecksum === lastLoadedChecksumRef.current) {
+              return null;
+            }
+
+            lastLoadedChecksumRef.current = incomingChecksum;
+
             const updatedDb = {
               ...data,
               node_positions: mergedPositions,
@@ -116,6 +127,7 @@ export default function App() {
             try {
               localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
             } catch (e) {}
+            setSyncStatus('synced');
             return updatedDb;
           }
         } else {
@@ -138,7 +150,7 @@ export default function App() {
   }, [loadUniversalDatabase]);
 
   // Real-time synchronization across devices:
-  // Polls server every 10 seconds, and immediately re-syncs when the user focuses window or returns to the tab
+  // Re-syncs when user focuses window or returns to the tab, plus unobtrusive 25-second background check
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -154,7 +166,7 @@ export default function App() {
 
     const intervalId = setInterval(() => {
       loadUniversalDatabase(true);
-    }, 10000);
+    }, 25000);
 
     return () => {
       window.removeEventListener('visibilitychange', handleVisibility);
@@ -178,15 +190,25 @@ export default function App() {
 
     setSyncStatus('saving');
     try {
-      const res = await fetch('/api/database/positions', {
-        method: 'PATCH',
-        credentials: 'include',
+      let res = await fetch('/api/database/positions', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store',
         },
         body: JSON.stringify({ positions: toSend }),
       });
+
+      if (!res.ok) {
+        res = await fetch('/api/database/positions', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store',
+          },
+          body: JSON.stringify({ positions: toSend }),
+        });
+      }
 
       if (res.ok) {
         for (const k of Object.keys(toSend)) {
@@ -218,7 +240,6 @@ export default function App() {
         } else {
           fetch('/api/database/positions', {
             method: 'POST',
-            credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: payload,
             keepalive: true,
@@ -244,7 +265,6 @@ export default function App() {
       // 2. Persist to universal server JSON file so all other devices see it
       const res = await fetch('/api/database', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -283,6 +303,8 @@ export default function App() {
         node_positions: updatedPositions,
       };
 
+      lastLoadedChecksumRef.current = `${newDb.verses.length}-${newDb.edges.length}-${JSON.stringify(updatedPositions)}`;
+
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
       } catch (e) {}
@@ -296,7 +318,7 @@ export default function App() {
     }
     savePositionsDebounceRef.current = setTimeout(() => {
       flushPendingPositions();
-    }, 250);
+    }, 120);
   };
 
   // Manual explicit save to cloud layout
@@ -306,7 +328,6 @@ export default function App() {
       const allPositions = database.node_positions || {};
       const res = await fetch('/api/database/positions', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store',

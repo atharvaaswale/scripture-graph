@@ -16,16 +16,24 @@ const PORT = 3000;
 
 // CORS & Preflight middleware for multi-device cross-network support
 app.use((req: Request, res: Response, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, Pragma, Expires');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, Pragma, Expires, X-Requested-With');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
   next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.text({ limit: '50mb', type: ['text/*', 'application/json'] }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // --- UNIVERSAL DATABASE PERSISTENCE ON DISK ---
 // Stored in data/universal_database.json so every device connects to the exact same dataset & positions
