@@ -87,19 +87,26 @@ export default function App() {
       if (!silent) setIsLoadingDb(true);
       const res = await fetch(`/api/database?t=${Date.now()}`, {
         cache: 'no-store',
+        credentials: 'include',
         headers: {
+          'Accept': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
         },
       });
       if (res.ok) {
-        const data = await res.json();
-        if (data && Array.isArray(data.verses) && data.verses.length > 0) {
-          setDatabase(data);
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-          } catch (e) {}
-          return data;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && Array.isArray(data.verses) && data.verses.length > 0) {
+            setDatabase(data);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (e) {}
+            return data;
+          }
+        } else {
+          console.warn('[Client] Server responded with non-JSON content-type:', contentType);
         }
       } else {
         console.warn(`[Client] Server responded with status ${res.status}`);
@@ -157,8 +164,10 @@ export default function App() {
       // 2. Persist to universal server JSON file so all other devices see it
       const res = await fetch('/api/database', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
           'Cache-Control': 'no-cache, no-store',
         },
         body: JSON.stringify(newDb),
@@ -201,6 +210,7 @@ export default function App() {
       savePositionsDebounceRef.current = setTimeout(() => {
         fetch('/api/database/positions', {
           method: 'PATCH',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
           body: JSON.stringify({ positions: { [id]: position } }),
         }).catch((err) => console.warn('Failed to save arranged node position:', err));
@@ -660,10 +670,10 @@ export default function App() {
         database={database}
         isOpen={isJsonModalOpen}
         onClose={() => setIsJsonModalOpen(false)}
-        onUpdateDatabase={(db) => {
+        onUpdateDatabase={async (db) => {
           setDatabase(db);
-          persistUniversalDatabase(db);
-          showToast('Updated universal database from JSON');
+          await persistUniversalDatabase(db);
+          showToast(`Updated universal database with ${db.verses.length} verses`);
         }}
         onResetDatabase={handleResetDatabase}
       />

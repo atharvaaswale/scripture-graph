@@ -6,7 +6,7 @@ interface JsonManagerModalProps {
   database: ScriptureDatabase;
   isOpen: boolean;
   onClose: () => void;
-  onUpdateDatabase: (updated: ScriptureDatabase) => void;
+  onUpdateDatabase: (updated: ScriptureDatabase) => void | Promise<void | boolean>;
   onResetDatabase: () => void;
 }
 
@@ -24,6 +24,8 @@ export const JsonManagerModal: React.FC<JsonManagerModalProps> = ({
   const [editMode, setEditMode] = useState(false);
   const [editedText, setEditedText] = useState(jsonString);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [statusFeedback, setStatusFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(jsonString);
@@ -41,17 +43,25 @@ export const JsonManagerModal: React.FC<JsonManagerModalProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const handleApplyEdit = () => {
+  const handleApplyEdit = async () => {
     try {
+      setParseError(null);
       const parsed = JSON.parse(editedText);
       if (!parsed.verses || !parsed.edges) {
         throw new Error('Invalid JSON: Must contain "verses" and "edges" arrays.');
       }
-      onUpdateDatabase(parsed);
+      setIsProcessing(true);
+      await onUpdateDatabase(parsed);
       setEditMode(false);
-      setParseError(null);
+      setStatusFeedback({
+        type: 'success',
+        message: `Successfully updated universal database with ${parsed.verses.length} verses.`,
+      });
+      setTimeout(() => setStatusFeedback(null), 4000);
     } catch (err: any) {
       setParseError(err.message || 'Malformed JSON');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -59,21 +69,47 @@ export const JsonManagerModal: React.FC<JsonManagerModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setStatusFeedback(null);
+    setParseError(null);
+    setIsProcessing(true);
+
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
         const parsed = JSON.parse(text);
-        if (!parsed.verses || !parsed.edges) {
-          throw new Error('Invalid JSON schema');
+        if (!parsed || !Array.isArray(parsed.verses) || !Array.isArray(parsed.edges)) {
+          throw new Error('Invalid schema: file must contain "verses" and "edges" arrays.');
         }
-        onUpdateDatabase(parsed);
-        alert('Database successfully imported from JSON file.');
+
+        // Validate verses
+        const versesCount = parsed.verses.length;
+        const edgesCount = parsed.edges.length;
+
+        await onUpdateDatabase(parsed);
+        setStatusFeedback({
+          type: 'success',
+          message: `Imported ${versesCount} verses & ${edgesCount} connections. Synchronized across all devices!`,
+        });
+        setTimeout(() => setStatusFeedback(null), 5000);
       } catch (err: any) {
-        alert(`Failed to parse imported JSON: ${err.message}`);
+        setStatusFeedback({
+          type: 'error',
+          message: `Failed to import JSON: ${err.message || 'Invalid format'}`,
+        });
+      } finally {
+        setIsProcessing(false);
       }
     };
+    reader.onerror = () => {
+      setStatusFeedback({
+        type: 'error',
+        message: 'Could not read file from device.',
+      });
+      setIsProcessing(false);
+    };
     reader.readAsText(file);
+    e.target.value = '';
   };
 
   return (
@@ -135,9 +171,12 @@ export const JsonManagerModal: React.FC<JsonManagerModalProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                if (confirm('Reset database to seed verses & edges?')) {
-                  onResetDatabase();
-                }
+                onResetDatabase();
+                setStatusFeedback({
+                  type: 'success',
+                  message: 'Database reset to initial constellation seed.',
+                });
+                setTimeout(() => setStatusFeedback(null), 4000);
               }}
               className="px-2.5 py-1 text-stone-500 hover:text-amber-400 rounded-lg flex items-center gap-1 transition-colors"
             >
@@ -158,6 +197,32 @@ export const JsonManagerModal: React.FC<JsonManagerModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Live Status / Import Feedback Banner */}
+        {statusFeedback && (
+          <div
+            className={`px-5 py-2.5 text-xs font-medium border-b flex items-center justify-between gap-2 ${
+              statusFeedback.type === 'success'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-200'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-200'
+            }`}
+          >
+            <span>{statusFeedback.message}</span>
+            <button
+              onClick={() => setStatusFeedback(null)}
+              className="p-1 hover:text-white rounded"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {isProcessing && (
+          <div className="px-5 py-1.5 bg-amber-950/40 border-b border-amber-500/20 text-amber-300 text-xs flex items-center gap-2 animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <span>Writing and syncing universal database across all devices...</span>
+          </div>
+        )}
 
         {/* Editor Area */}
         <div className="flex-1 overflow-y-auto p-4 bg-[#090a0e] text-emerald-400 font-mono text-xs">

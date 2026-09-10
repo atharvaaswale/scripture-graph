@@ -62,6 +62,21 @@ function saveUniversalDatabase(data: any): void {
   const serialized = JSON.stringify(data, null, 2);
   fs.writeFileSync(UNIVERSAL_DB_FILE, serialized, 'utf-8');
   console.log(`[Universal DB] Saved ${data.verses?.length ?? 0} verses, ${data.edges?.length ?? 0} edges, and ${Object.keys(data.node_positions || {}).length} positions to ${UNIVERSAL_DB_FILE}`);
+
+  // ALSO sync to src/data/initialData.ts so any new build, cold container, or device
+  // immediately has all imported verses and edges baked directly into the codebase!
+  try {
+    const candidatePath1 = path.resolve(process.cwd(), 'src', 'data', 'initialData.ts');
+    const candidatePath2 = path.resolve(__dirname, 'src', 'data', 'initialData.ts');
+    const initialDataPath = fs.existsSync(candidatePath1) ? candidatePath1 : candidatePath2;
+    if (fs.existsSync(path.dirname(initialDataPath))) {
+      const code = `import { ScriptureDatabase } from '../types';\n\nexport const INITIAL_SCRIPTURE_DB: ScriptureDatabase = ${serialized};\n`;
+      fs.writeFileSync(initialDataPath, code, 'utf-8');
+      console.log(`[Universal DB] Also synchronized initialData.ts directly to disk`);
+    }
+  } catch (err) {
+    console.warn(`[Universal DB] Could not sync to initialData.ts:`, err);
+  }
 }
 
 // 1. Get Universal Database (with explicit no-cache headers for instant cross-device updates)
@@ -87,6 +102,11 @@ app.post('/api/database', (req: Request, res: Response) => {
     if (!payload || !Array.isArray(payload.verses) || !Array.isArray(payload.edges)) {
       console.warn('[Universal DB] POST invalid payload structure');
       return res.status(400).json({ error: 'Invalid database structure' });
+    }
+    const currentDb = ensureUniversalDatabase();
+    // Preserve existing node positions if incoming payload does not specify them
+    if ((!payload.node_positions || Object.keys(payload.node_positions).length === 0) && currentDb.node_positions) {
+      payload.node_positions = currentDb.node_positions;
     }
     saveUniversalDatabase(payload);
     console.log(`[Universal DB] POST /api/database updated successfully with ${payload.verses.length} verses`);
