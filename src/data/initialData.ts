@@ -165,5 +165,14 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
   review_notes: [
     "Baseline database initialized with 7 foundational verses from Manache Shlok and Dasbodh.",
     "DB-6.1.16 closely parallels Bhagavad Gita 2.23 (नैनं छिन्दन्ति शस्त्राणि) on the indestructibility of the imperishable truth."
-  ]
+  ],
+  node_positions: {
+    'MS-178': { x: -140, y: -45, fx: -140, fy: -45 },
+    'MS-179': { x: -35, y: 55, fx: -35, fy: 55 },
+    'DB-6.1.16': { x: 35, y: -110, fx: 35, fy: -110 },
+    'MS-189': { x: 145, y: -20, fx: 145, fy: -20 },
+    'DB-5.1.40': { x: 135, y: 95, fx: 135, fy: 95 },
+    'DB-6.2.13': { x: 190, y: -110, fx: 190, fy: -110 },
+    'DB-4.4.5': { x: 45, y: 155, fx: 45, fy: 155 },
+  },
 };

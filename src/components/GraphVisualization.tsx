@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import * as d3 from 'd3';
-import { Verse, Edge, RelationType } from '../types';
+import { Verse, Edge, RelationType, NodePosition } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw, X, Trash2, Check } from 'lucide-react';
 
 interface GraphVisualizationProps {
@@ -16,6 +16,8 @@ interface GraphVisualizationProps {
   activeScriptures: Set<string>;
   activeRelations?: Set<RelationType>;
   numeralMode?: 'devanagari' | 'latin';
+  nodePositions?: Record<string, NodePosition>;
+  onSaveNodePosition?: (id: string, position: NodePosition) => void;
 }
 
 export interface GraphNode extends d3.SimulationNodeDatum {
@@ -164,6 +166,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   activeScriptures,
   activeRelations,
   numeralMode = 'devanagari',
+  nodePositions,
+  onSaveNodePosition,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -172,6 +176,8 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   const currentTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const isInitializedRef = useRef(false);
   const dragJustEndedRef = useRef(false);
+  const onSaveNodePositionRef = useRef(onSaveNodePosition);
+  onSaveNodePositionRef.current = onSaveNodePosition;
 
   // Screen-space cursor tracking & spotlight (Google Stitch style)
   const [pointerPos, setPointerPos] = useState<{ x: number; y: number; visible: boolean }>({
@@ -227,8 +233,19 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   const activeChainVerseIdsRef = useRef(activeChainVerseIds);
   activeChainVerseIdsRef.current = activeChainVerseIds;
 
-  // Track mouse coordinates for Google Stitch flashlight effect
+  // Track mouse coordinates for Google Stitch flashlight effect (DESKTOP ONLY)
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Disable highlighted cursor on mobile/touch screens
+    if (
+      e.pointerType === 'touch' ||
+      (typeof window !== 'undefined' && (
+        window.innerWidth < 768 ||
+        window.matchMedia('(pointer: coarse)').matches
+      ))
+    ) {
+      return;
+    }
+
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -515,14 +532,24 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       .attr('height', '100%')
       .attr('fill', 'url(#static-dim-dots)');
 
-    // 3. Cursor spotlight: illuminated warm starlight-gold dots within radius 80px (void stays dark)
-    svg
+    // 3. Cursor spotlight: illuminated warm starlight-gold dots within radius 80px (void stays dark on desktop)
+    const isMobileDevice =
+      typeof window !== 'undefined' &&
+      (window.innerWidth < 768 ||
+        window.matchMedia('(pointer: coarse)').matches ||
+        window.matchMedia('(hover: none)').matches);
+
+    const goldSpotlight = svg
       .append('rect')
       .attr('class', 'static-gold-dots-spotlight pointer-events-none')
       .attr('width', '100%')
       .attr('height', '100%')
       .attr('fill', 'url(#static-gold-dots)')
       .attr('mask', 'url(#cursor-spotlight-mask)');
+
+    if (isMobileDevice) {
+      goldSpotlight.style('display', 'none');
+    }
 
     // Main transformed world group
     const g = svg.append('g').attr('class', 'constellation-group');
@@ -559,19 +586,25 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       'DB-4.4.5': { x: 45, y: 155 },
     };
 
-    // Prepare simulation nodes
+    // Prepare simulation nodes with user-saved coordinates or defaults
+    const savedPositions = nodePositions || {};
     const existingNodeMap = new Map<string, GraphNode>(nodesRef.current.map((n) => [n.id, n]));
     const nodes: GraphNode[] = filteredVerses.map((v) => {
       const existing = existingNodeMap.get(v.id);
+      const saved = savedPositions[v.id];
       const hint = INITIAL_COORDS[v.id];
+      const posX = saved?.x ?? existing?.x ?? hint?.x ?? (Math.random() - 0.5) * 160;
+      const posY = saved?.y ?? existing?.y ?? hint?.y ?? (Math.random() - 0.5) * 160;
+      const fixX = saved?.fx !== undefined ? (saved.fx ?? undefined) : (existing?.fx ?? hint?.x);
+      const fixY = saved?.fy !== undefined ? (saved.fy ?? undefined) : (existing?.fy ?? hint?.y);
       return {
         id: v.id,
         verse: v,
         radius: 20,
-        x: existing?.x ?? hint?.x ?? (Math.random() - 0.5) * 160,
-        y: existing?.y ?? hint?.y ?? (Math.random() - 0.5) * 160,
-        fx: existing?.fx,
-        fy: existing?.fy,
+        x: posX,
+        y: posY,
+        fx: fixX,
+        fy: fixY,
         vx: 0,
         vy: 0,
       };
@@ -966,6 +999,14 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
             d.fy = event.y;
             d.x = event.x;
             d.y = event.y;
+
+            // Persist arranged position to universal JSON database!
+            onSaveNodePositionRef.current?.(d.id, {
+              x: event.x,
+              y: event.y,
+              fx: event.x,
+              fy: event.y,
+            });
           }
         });
 
@@ -985,13 +1026,17 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       node.attr('transform', (d) => `translate(${d.x},${d.y})`);
     });
 
-    // --- 6. SOFT STARLIGHT-GOLD CURSOR TRACKER (SCREEN-SPACE) ---
+    // --- 6. SOFT STARLIGHT-GOLD CURSOR TRACKER (SCREEN-SPACE, DESKTOP ONLY) ---
     const cursorTracker = svg
       .append('g')
       .attr('id', 'starlight-cursor-tracker')
       .attr('class', 'pointer-events-none')
       .attr('transform', `translate(${initialCursorX}, ${initialCursorY})`)
       .attr('opacity', pointerPos.visible ? 1 : 0.85);
+
+    if (isMobileDevice) {
+      cursorTracker.style('display', 'none');
+    }
 
     // Subtle outer starlight ring (contrasting ring around the pointer)
     cursorTracker
@@ -1021,7 +1066,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [filteredVerses, filteredEdges, isCuratorMode, numeralMode]);
+  }, [filteredVerses, filteredEdges, isCuratorMode, numeralMode, nodePositions]);
 
   // 2. LIGHTWEIGHT SELECTION UPDATE EFFECT
   // Updates stroke highlights without rebuilding the SVG, restarting simulation, or moving nodes!

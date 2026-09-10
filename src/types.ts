@@ -43,6 +43,13 @@ export interface Chain {
   sequence: string[];
 }
 
+export interface NodePosition {
+  x: number;
+  y: number;
+  fx?: number | null;
+  fy?: number | null;
+}
+
 export interface ScriptureDatabase {
   schema_version: string;
   relation_vocabulary: RelationType[];
@@ -51,6 +58,7 @@ export interface ScriptureDatabase {
   edges: Edge[];
   chains: Chain[];
   review_notes?: string[];
+  node_positions?: Record<string, NodePosition>;
 }
 
 export interface ProposeBatchRequest {

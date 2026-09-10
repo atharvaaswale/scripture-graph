@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { INITIAL_SCRIPTURE_DB } from './data/initialData';
-import { ScriptureDatabase, Verse, Edge } from './types';
+import { ScriptureDatabase, Verse, Edge, NodePosition } from './types';
 import { GraphVisualization, SCRIPTURE_THEMES } from './components/GraphVisualization';
 import { VerseCatalog } from './components/VerseCatalog';
 import { VerseDetailsModal } from './components/VerseDetailsModal';
 import { BatchProposerModal } from './components/BatchProposerModal';
 import { JsonManagerModal } from './components/JsonManagerModal';
 import { ManualVerseModal } from './components/ManualVerseModal';
+import { LoginModal } from './components/LoginModal';
 import {
   Plus,
   MoreHorizontal,
@@ -18,11 +19,24 @@ import {
   X,
   Move,
   Link2,
+  Lock,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'scripture_graph_database_v1';
 
 export default function App() {
+  // Login Authentication State (admin / 10509)
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return (
+        localStorage.getItem('scripture_auth_authenticated') === 'true' ||
+        sessionStorage.getItem('scripture_auth_authenticated') === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
+
   const [database, setDatabase] = useState<ScriptureDatabase>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -34,6 +48,8 @@ export default function App() {
     }
     return INITIAL_SCRIPTURE_DB;
   });
+
+  const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
 
   // Selected verse for the minimal 2-item overlay
   const [selectedVerse, setSelectedVerse] = useState<Verse | null>(null);
@@ -59,17 +75,86 @@ export default function App() {
   // Subtle toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const savePositionsDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 1. Fetch Universal Database from Server on Mount
+  // Makes sure whichever device opens the site, it loads the universal JSON file & positions
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(database));
-    } catch {
-      // ignore
+    let isMounted = true;
+    async function loadUniversalDatabase() {
+      try {
+        setIsLoadingDb(true);
+        const res = await fetch('/api/database');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.verses) && isMounted) {
+            setDatabase(data);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (e) {}
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load universal database from server, using local fallback:', err);
+      } finally {
+        if (isMounted) setIsLoadingDb(false);
+      }
     }
-  }, [database]);
+    loadUniversalDatabase();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  // Persist full database to universal server JSON and local cache
+  const persistUniversalDatabase = async (newDb: ScriptureDatabase) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
+      await fetch('/api/database', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newDb),
+      });
+    } catch (err) {
+      console.error('Failed to persist universal database to server:', err);
+    }
+  };
+
+  // Remember how user arranged nodes
+  const handleSaveNodePosition = (id: string, position: NodePosition) => {
+    setDatabase((prev) => {
+      const updatedPositions = {
+        ...(prev.node_positions || {}),
+        [id]: position,
+      };
+      const newDb = {
+        ...prev,
+        node_positions: updatedPositions,
+      };
+
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
+      } catch (e) {}
+
+      // Debounce network write to server positions endpoint
+      if (savePositionsDebounceRef.current) {
+        clearTimeout(savePositionsDebounceRef.current);
+      }
+      savePositionsDebounceRef.current = setTimeout(() => {
+        fetch('/api/database/positions', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ positions: { [id]: position } }),
+        }).catch((err) => console.warn('Failed to save arranged node position:', err));
+      }, 250);
+
+      return newDb;
+    });
   };
 
   const handleCommitBatch = (
@@ -84,66 +169,111 @@ export default function App() {
       const existingEdgeKeys = new Set(prev.edges.map(edgeKey));
       const freshEdges = newEdges.filter((e) => !existingEdgeKeys.has(edgeKey(e)));
 
-      return {
+      const newDb = {
         ...prev,
         verses: [...prev.verses, ...freshVerses],
         edges: [...prev.edges, ...freshEdges],
       };
+      persistUniversalDatabase(newDb);
+      return newDb;
     });
 
-    showToast(`Merged ${newVerses.length} verses & ${newEdges.length} connections.`);
+    showToast(`Merged ${newVerses.length} verses & ${newEdges.length} connections to universal database.`);
   };
 
   // Direct manipulation connection created on canvas or modal
   const handleAddEdge = (edge: Edge) => {
     setDatabase((prev) => {
       const filtered = prev.edges.filter((e) => !(e.from === edge.from && e.to === edge.to));
-      return {
+      const newDb = {
         ...prev,
         edges: [...filtered, edge],
       };
+      persistUniversalDatabase(newDb);
+      return newDb;
     });
     showToast(`Linked ${edge.from} → ${edge.to} (${edge.relation})`);
   };
 
   const handleUpdateEdge = (from: string, to: string, updatedWhy: string) => {
-    setDatabase((prev) => ({
-      ...prev,
-      edges: prev.edges.map((e) =>
-        e.from === from && e.to === to ? { ...e, why: updatedWhy } : e
-      ),
-    }));
+    setDatabase((prev) => {
+      const newDb = {
+        ...prev,
+        edges: prev.edges.map((e) =>
+          e.from === from && e.to === to ? { ...e, why: updatedWhy } : e
+        ),
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
     showToast('Updated connection reasoning');
   };
 
   const handleDeleteEdge = (from: string, to: string) => {
-    setDatabase((prev) => ({
-      ...prev,
-      edges: prev.edges.filter((e) => !(e.from === from && e.to === to)),
-    }));
+    setDatabase((prev) => {
+      const newDb = {
+        ...prev,
+        edges: prev.edges.filter((e) => !(e.from === from && e.to === to)),
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
     showToast(`Removed link ${from} → ${to}`);
   };
 
   const handleAddVerse = (verse: Verse) => {
-    setDatabase((prev) => ({
-      ...prev,
-      verses: [...prev.verses, verse],
-    }));
-    showToast(`Added ${verse.id}`);
+    setDatabase((prev) => {
+      const newDb = {
+        ...prev,
+        verses: [...prev.verses, verse],
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
+    showToast(`Added ${verse.id} to universal database`);
   };
 
   const handleDeleteVerse = (verseId: string) => {
-    setDatabase((prev) => ({
-      ...prev,
-      verses: prev.verses.filter((v) => v.id !== verseId),
-      edges: prev.edges.filter((e) => e.from !== verseId && e.to !== verseId),
-    }));
-    showToast(`Deleted ${verseId}`);
+    setDatabase((prev) => {
+      const updatedPositions = { ...(prev.node_positions || {}) };
+      delete updatedPositions[verseId];
+      const newDb = {
+        ...prev,
+        verses: prev.verses.filter((v) => v.id !== verseId),
+        edges: prev.edges.filter((e) => e.from !== verseId && e.to !== verseId),
+        node_positions: updatedPositions,
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
+    showToast(`Deleted ${verseId} from universal database`);
   };
 
   const handleResetDatabase = () => {
-    setDatabase(INITIAL_SCRIPTURE_DB);
-    showToast('Reset constellation to initial seed scripture database');
+    fetch('/api/database/reset', { method: 'POST' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.database) {
+          setDatabase(data.database);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data.database));
+          showToast('Reset universal database to initial seed scripture database');
+        }
+      })
+      .catch(() => {
+        setDatabase(INITIAL_SCRIPTURE_DB);
+        persistUniversalDatabase(INITIAL_SCRIPTURE_DB);
+        showToast('Reset constellation to initial seed scripture database');
+      });
+  };
+
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem('scripture_auth_authenticated');
+      sessionStorage.removeItem('scripture_auth_authenticated');
+    } catch (e) {}
+    setIsAuthenticated(false);
+    setIsMenuOpen(false);
+    showToast('Logged out');
   };
 
   const toggleScriptureFilter = (sc: string) => {
@@ -389,6 +519,14 @@ export default function App() {
                 <RotateCcw className="w-3.5 h-3.5" />
                 Reset Seed Data
               </button>
+
+              <button
+                onClick={handleLogout}
+                className="w-full px-2.5 py-1.5 hover:bg-rose-500/10 rounded-lg flex items-center gap-2 text-rose-400/80 hover:text-rose-300 transition-colors border-t border-white/5 pt-2"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Sign Out / Lock (admin)
+              </button>
             </div>
           </div>
         )}
@@ -407,8 +545,18 @@ export default function App() {
           onDeleteEdge={handleDeleteEdge}
           activeScriptures={activeScriptures}
           numeralMode={numeralMode}
+          nodePositions={database.node_positions}
+          onSaveNodePosition={handleSaveNodePosition}
         />
       </main>
+
+      {/* Universal Database Sync Status */}
+      {isLoadingDb && (
+        <div className="fixed bottom-6 left-6 z-40 bg-[#161824]/90 border border-amber-500/20 px-3 py-1.5 rounded-full text-[11px] font-mono text-amber-300/80 flex items-center gap-2 backdrop-blur-md">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>Syncing universal database...</span>
+        </div>
+      )}
 
       {/* SINGLE FLOATING "+" BUTTON (Bottom Right) */}
       <div className="absolute bottom-6 right-6 z-20">
@@ -456,7 +604,8 @@ export default function App() {
         onClose={() => setIsJsonModalOpen(false)}
         onUpdateDatabase={(db) => {
           setDatabase(db);
-          showToast('Updated database from JSON');
+          persistUniversalDatabase(db);
+          showToast('Updated universal database from JSON');
         }}
         onResetDatabase={handleResetDatabase}
       />
@@ -484,6 +633,15 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* AUTHENTICATION GATE: ADMIN / 10509 REQUIRED TO ENTER THE SITE */}
+      <LoginModal
+        isOpen={!isAuthenticated}
+        onLoginSuccess={() => {
+          setIsAuthenticated(true);
+          showToast('Welcome, admin');
+        }}
+      />
     </div>
   );
 }

@@ -1,8 +1,10 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+import { INITIAL_SCRIPTURE_DB } from './src/data/initialData';
 
 dotenv.config();
 
@@ -13,6 +15,95 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// --- UNIVERSAL DATABASE PERSISTENCE ON DISK ---
+// Stored in data/universal_database.json so every device connects to the exact same dataset & positions
+const DATA_DIR = path.join(process.cwd(), 'data');
+const UNIVERSAL_DB_FILE = path.join(DATA_DIR, 'universal_database.json');
+
+function ensureUniversalDatabase(): any {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(UNIVERSAL_DB_FILE)) {
+      fs.writeFileSync(UNIVERSAL_DB_FILE, JSON.stringify(INITIAL_SCRIPTURE_DB, null, 2), 'utf-8');
+      return INITIAL_SCRIPTURE_DB;
+    }
+    const content = fs.readFileSync(UNIVERSAL_DB_FILE, 'utf-8');
+    const parsed = JSON.parse(content);
+    // Ensure node_positions map exists
+    if (!parsed.node_positions && INITIAL_SCRIPTURE_DB.node_positions) {
+      parsed.node_positions = INITIAL_SCRIPTURE_DB.node_positions;
+    }
+    return parsed;
+  } catch (err) {
+    console.error('Error reading universal database file, falling back to seed:', err);
+    return INITIAL_SCRIPTURE_DB;
+  }
+}
+
+function saveUniversalDatabase(data: any): void {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  fs.writeFileSync(UNIVERSAL_DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+// 1. Get Universal Database
+app.get('/api/database', (_req: Request, res: Response) => {
+  try {
+    const db = ensureUniversalDatabase();
+    res.json(db);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to retrieve universal database' });
+  }
+});
+
+// 2. Save Full Universal Database (verses, edges, chains, node_positions)
+app.post('/api/database', (req: Request, res: Response) => {
+  try {
+    const payload = req.body;
+    if (!payload || !Array.isArray(payload.verses) || !Array.isArray(payload.edges)) {
+      return res.status(400).json({ error: 'Invalid database structure' });
+    }
+    saveUniversalDatabase(payload);
+    res.json({ success: true, database: payload });
+  } catch (err: any) {
+    console.error('Failed to save universal database:', err);
+    res.status(500).json({ error: 'Failed to save universal database' });
+  }
+});
+
+// 3. Update Arranged Node Positions
+app.patch('/api/database/positions', (req: Request, res: Response) => {
+  try {
+    const { positions } = req.body;
+    if (!positions || typeof positions !== 'object') {
+      return res.status(400).json({ error: 'Invalid positions payload' });
+    }
+    const currentDb = ensureUniversalDatabase();
+    currentDb.node_positions = {
+      ...(currentDb.node_positions || {}),
+      ...positions,
+    };
+    saveUniversalDatabase(currentDb);
+    res.json({ success: true, node_positions: currentDb.node_positions });
+  } catch (err: any) {
+    console.error('Failed to update node positions:', err);
+    res.status(500).json({ error: 'Failed to update node positions' });
+  }
+});
+
+// 4. Reset Universal Database to Seed Data
+app.post('/api/database/reset', (_req: Request, res: Response) => {
+  try {
+    saveUniversalDatabase(INITIAL_SCRIPTURE_DB);
+    res.json({ success: true, database: INITIAL_SCRIPTURE_DB });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to reset database' });
+  }
+});
 
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
@@ -34,6 +125,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+    universalDbPresent: fs.existsSync(UNIVERSAL_DB_FILE),
     timestamp: new Date().toISOString(),
   });
 });

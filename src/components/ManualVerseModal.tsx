@@ -27,6 +27,20 @@ export const ManualVerseModal: React.FC<ManualVerseModalProps> = ({
 
   const currentScriptureDef = database.scriptures[scripture];
 
+  const resetForm = (sc: string = scripture) => {
+    setId('');
+    setDisplayRef('');
+    setText('');
+    setThemeTagsInput('');
+    setError(null);
+    const def = database.scriptures[sc];
+    const initialLoc: Record<string, number | string> = {};
+    (def?.locator_fields || ['shlok']).forEach((f) => {
+      initialLoc[f] = 1;
+    });
+    setLocators(initialLoc);
+  };
+
   const handleScriptureChange = (sc: string) => {
     setScripture(sc);
     const def = database.scriptures[sc];
@@ -52,12 +66,22 @@ export const ManualVerseModal: React.FC<ManualVerseModalProps> = ({
       return;
     }
 
+    // Build locator coordinates string, e.g. "6.1.12", "2.23", "180"
+    let locatorCoordsStr = '';
+    if (scripture === 'MS') {
+      locatorCoordsStr = String(locators.shlok ?? 1);
+    } else if (scripture === 'DB') {
+      locatorCoordsStr = `${locators.dashak ?? 1}.${locators.samas ?? 1}.${locators.ovi ?? 1}`;
+    } else if (scripture === 'BG') {
+      locatorCoordsStr = `${locators.chapter ?? 1}.${locators.verse ?? 1}`;
+    } else {
+      const fields = currentScriptureDef?.locator_fields || Object.keys(locators);
+      locatorCoordsStr = fields.map((f) => locators[f] ?? 1).join('.');
+    }
+
     let calculatedId = id.trim();
     if (!calculatedId) {
-      if (scripture === 'MS') calculatedId = `MS-${locators.shlok || 1}`;
-      else if (scripture === 'DB') calculatedId = `DB-${locators.dashak || 1}.${locators.samas || 1}.${locators.ovi || 1}`;
-      else if (scripture === 'BG') calculatedId = `BG-${locators.chapter || 1}.${locators.verse || 1}`;
-      else calculatedId = `${scripture}-${Object.values(locators).join('.')}`;
+      calculatedId = `${scripture}-${locatorCoordsStr}`;
     }
 
     if (database.verses.some((v) => v.id === calculatedId)) {
@@ -65,9 +89,10 @@ export const ManualVerseModal: React.FC<ManualVerseModalProps> = ({
       return;
     }
 
+    // If display reference is empty, automatically format as "[Scripture Code] [Locator coordinates]" e.g. "DB 6.1.12" or "BG 2.23"
     const calculatedRef =
       displayRef.trim() ||
-      `${currentScriptureDef?.full_name || scripture} ${Object.values(locators).join('.')}`;
+      `${scripture} ${locatorCoordsStr}`;
 
     const tags = themeTagsInput
       .split(',')
@@ -85,6 +110,8 @@ export const ManualVerseModal: React.FC<ManualVerseModalProps> = ({
       notes: null,
     });
 
+    // Clear form after star is added successfully
+    resetForm(scripture);
     onClose();
   };
 
@@ -182,8 +209,8 @@ export const ManualVerseModal: React.FC<ManualVerseModalProps> = ({
               type="text"
               value={displayRef}
               onChange={(e) => setDisplayRef(e.target.value)}
-              placeholder="e.g. मनाचे श्लोक १८० or दासबोध ५.२.१"
-              className="w-full p-2 bg-[#090a0e] border border-white/10 rounded-lg text-stone-200 focus:ring-1 focus:ring-amber-500 outline-none font-devanagari"
+              placeholder='Auto: "[Scripture Code] [Coordinates]" e.g. DB 6.1.12 or BG 2.23'
+              className="w-full p-2 bg-[#090a0e] border border-white/10 rounded-lg text-stone-200 focus:ring-1 focus:ring-amber-500 outline-none font-mono text-xs"
             />
           </div>
 

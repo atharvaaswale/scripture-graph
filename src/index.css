@@ -14,3 +14,13 @@
 .font-devanagari {
   font-family: 'Noto Serif Devanagari', 'Yatra One', Georgia, serif;
 }
+
+/* Mobile & Touch: Disable highlighted radius cursor tracker & spotlight */
+@media (max-width: 768px), (pointer: coarse), (hover: none) {
+  #starlight-cursor-tracker,
+  .static-gold-dots-spotlight {
+    display: none !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+  }
+}
