@@ -602,18 +602,7 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       svg.call(zoom.transform, currentTransformRef.current);
     }
 
-    // Position hints replicating the harmonious layout in image.png
-    const INITIAL_COORDS: Record<string, { x: number; y: number }> = {
-      'MS-178': { x: -140, y: -45 },
-      'MS-179': { x: -35, y: 55 },
-      'DB-6.1.16': { x: 35, y: -110 },
-      'MS-189': { x: 145, y: -20 },
-      'DB-5.1.40': { x: 135, y: 95 },
-      'DB-6.2.13': { x: 190, y: -110 },
-      'DB-4.4.5': { x: 45, y: 155 },
-    };
-
-    // Prepare simulation nodes with user-saved coordinates or defaults
+    // Prepare simulation nodes directly with verse coordinates or saved positions from universal JSON
     const savedPositions = nodePositions || {};
     const existingNodeMap = new Map<string, GraphNode>(nodesRef.current.map((n) => [n.id, n]));
     const targetPosMap = targetPosMapRef.current;
@@ -622,24 +611,20 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     const nodes: GraphNode[] = filteredVerses.map((v, i) => {
       const existing = existingNodeMap.get(v.id);
       const saved = savedPositions[v.id];
-      const hint = INITIAL_COORDS[v.id];
 
       let posX: number;
       let posY: number;
-      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
-        posX = Math.round(saved.x);
-        posY = Math.round(saved.y);
-      } else if (typeof v.x === 'number' && typeof v.y === 'number') {
+      if (typeof v.x === 'number' && typeof v.y === 'number') {
         posX = Math.round(v.x);
         posY = Math.round(v.y);
+      } else if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
+        posX = Math.round(saved.x);
+        posY = Math.round(saved.y);
       } else if (existing && typeof existing.x === 'number' && typeof existing.y === 'number') {
         posX = Math.round(existing.x);
         posY = Math.round(existing.y);
-      } else if (hint) {
-        posX = hint.x;
-        posY = hint.y;
       } else {
-        // Deterministic, harmonious spiral constellation placement for any new nodes
+        // Fallback spiral constellation placement for any new nodes without assigned coordinates
         const angle = (i * 137.5 * Math.PI) / 180;
         const dist = 180 + Math.sqrt(i) * 45;
         posX = Math.round(Math.cos(angle) * dist);
@@ -1029,12 +1014,16 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
               dragJustEndedRef.current = false;
             }, 250);
 
-            const roundedX = Math.round(event.x);
-            const roundedY = Math.round(event.y);
+            const finalX = typeof d.x === 'number' ? d.x : event.x;
+            const finalY = typeof d.y === 'number' ? d.y : event.y;
+            const roundedX = Math.round(finalX);
+            const roundedY = Math.round(finalY);
             d.x = roundedX;
             d.y = roundedY;
             d.fx = roundedX;
             d.fy = roundedY;
+            d.verse.x = roundedX;
+            d.verse.y = roundedY;
             targetPosMapRef.current.set(d.id, { x: roundedX, y: roundedY });
 
             // Persist arranged position to universal JSON database!

@@ -24,9 +24,42 @@ import {
   AlertCircle,
   Save,
   Download,
+  Upload,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'scripture_graph_database_v1';
+
+// Helper to ensure every verse has numerical coordinates and node_positions is populated
+function sanitizeScriptureDatabase(raw: any): ScriptureDatabase | null {
+  if (!raw || !Array.isArray(raw.verses) || raw.verses.length === 0 || !Array.isArray(raw.edges)) {
+    return null;
+  }
+
+  const positions: Record<string, NodePosition> = { ...(raw.node_positions || {}) };
+
+  const sanitizedVerses: Verse[] = raw.verses.map((v: any) => {
+    const pos = positions[v.id];
+    const posX = typeof pos?.x === 'number' ? Math.round(pos.x) : typeof v.x === 'number' ? Math.round(v.x) : 0;
+    const posY = typeof pos?.y === 'number' ? Math.round(pos.y) : typeof v.y === 'number' ? Math.round(v.y) : 0;
+
+    if (!positions[v.id]) {
+      positions[v.id] = { x: posX, y: posY, fx: posX, fy: posY };
+    }
+
+    return {
+      ...v,
+      x: posX,
+      y: posY,
+    };
+  });
+
+  return {
+    ...raw,
+    verses: sanitizedVerses,
+    edges: raw.edges,
+    node_positions: positions,
+  };
+}
 
 export default function App() {
   // Login Authentication State (admin / 10509)
@@ -45,12 +78,16 @@ export default function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        const sanitized = sanitizeScriptureDatabase(parsed);
+        if (sanitized) {
+          return sanitized;
+        }
       }
     } catch {
       // ignore
     }
-    return INITIAL_SCRIPTURE_DB;
+    return sanitizeScriptureDatabase(INITIAL_SCRIPTURE_DB) || INITIAL_SCRIPTURE_DB;
   });
 
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
@@ -79,102 +116,82 @@ export default function App() {
   // Subtle toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const savePositionsDebounceRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingPositionsRef = useRef<Record<string, NodePosition>>({});
   const [syncStatus, setSyncStatus] = useState<'synced' | 'saving' | 'error'>('synced');
-
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const lastLoadedChecksumRef = useRef<string>('');
+  const hasBackendServerRef = useRef<boolean | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. Fetch Universal Database from Server JSON / Static JSON / Initial Data
+  // Helper to persist database to localStorage and non-blocking background server
+  const persistUniversalDatabase = useCallback((newDb: ScriptureDatabase) => {
+    const sanitized = sanitizeScriptureDatabase(newDb) || newDb;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+    } catch (err) {
+      console.warn('LocalStorage save failed:', err);
+    }
+
+    // Optional background server sync if backend exists
+    if (hasBackendServerRef.current !== false) {
+      fetch('/api/database', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(sanitized),
+      })
+        .then((res) => {
+          if (res.ok) {
+            hasBackendServerRef.current = true;
+          } else {
+            hasBackendServerRef.current = false;
+          }
+        })
+        .catch(() => {
+          hasBackendServerRef.current = false;
+        });
+    }
+  }, []);
+
+  // 1. Universal Database Loader: LocalStorage is the primary source of truth, falls back to /database.json
   const loadUniversalDatabase = useCallback(async (silent = false) => {
     try {
       if (!silent) setIsLoadingDb(true);
 
-      let loadedDb: ScriptureDatabase | null = null;
-
-      // A. Try loading from /api/database if running dev server / container
+      // Check current localStorage state first
+      let localDb: ScriptureDatabase | null = null;
       try {
-        const res = await fetch(`/api/database?t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: { Accept: 'application/json' },
-        });
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          localDb = sanitizeScriptureDatabase(parsed);
+        }
+      } catch {}
+
+      // If user already has data in localStorage, it is our universal source of truth!
+      if (localDb && localDb.verses.length > 0) {
+        setDatabase(localDb);
+        setSyncStatus('synced');
+        return localDb;
+      }
+
+      // If localStorage is empty (first-time visitor on Vercel or fresh browser):
+      let staticDb: ScriptureDatabase | null = null;
+      try {
+        const res = await fetch(`/database.json?t=${Date.now()}`, { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
-          if (data && Array.isArray(data.verses) && data.verses.length > 0) {
-            loadedDb = data;
-          }
+          staticDb = sanitizeScriptureDatabase(data);
         }
       } catch {}
 
-      // B. If server unavailable (e.g. on static Vercel deployment), fetch static /database.json
-      if (!loadedDb || !Array.isArray(loadedDb.verses) || loadedDb.verses.length === 0) {
-        try {
-          const res = await fetch(`/database.json?t=${Date.now()}`, {
-            cache: 'no-store',
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data && Array.isArray(data.verses) && data.verses.length > 0) {
-              loadedDb = data;
-            }
-          }
-        } catch {}
-      }
-
-      // C. Fallback to INITIAL_SCRIPTURE_DB (compiled directly into code)
-      if (!loadedDb || !Array.isArray(loadedDb.verses) || loadedDb.verses.length === 0) {
-        loadedDb = INITIAL_SCRIPTURE_DB;
-      }
-
-      // Merge with any local user adjustments stored in localStorage
-      let localPositions: Record<string, NodePosition> = {};
+      const baselineDb = staticDb || sanitizeScriptureDatabase(INITIAL_SCRIPTURE_DB) || INITIAL_SCRIPTURE_DB;
+      setDatabase(baselineDb);
       try {
-        const localSaved = localStorage.getItem(STORAGE_KEY);
-        if (localSaved) {
-          const parsed = JSON.parse(localSaved);
-          if (parsed.node_positions) {
-            localPositions = parsed.node_positions;
-          }
-        }
-      } catch {}
-
-      const mergedPositions: Record<string, NodePosition> = {
-        ...(loadedDb.node_positions || {}),
-        ...localPositions,
-        ...pendingPositionsRef.current,
-      };
-
-      // Ensure every verse note has x and y coordinates right in the JSON object
-      const mappedVerses = loadedDb.verses.map((v) => {
-        const pos = mergedPositions[v.id];
-        return {
-          ...v,
-          x: pos ? Math.round(pos.x) : v.x ?? 0,
-          y: pos ? Math.round(pos.y) : v.y ?? 0,
-        };
-      });
-
-      const incomingChecksum = `${mappedVerses.length}-${loadedDb.edges.length}-${JSON.stringify(mergedPositions)}`;
-
-      if (silent && incomingChecksum === lastLoadedChecksumRef.current) {
-        return null;
-      }
-
-      lastLoadedChecksumRef.current = incomingChecksum;
-
-      const updatedDb: ScriptureDatabase = {
-        ...loadedDb,
-        verses: mappedVerses,
-        node_positions: mergedPositions,
-      };
-
-      setDatabase(updatedDb);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(baselineDb));
       } catch {}
       setSyncStatus('synced');
-      return updatedDb;
+      return baselineDb;
     } catch (err) {
       console.warn('Could not load database:', err);
     } finally {
@@ -188,131 +205,24 @@ export default function App() {
     loadUniversalDatabase();
   }, [loadUniversalDatabase]);
 
-  // Re-sync when user focuses window or returns to the tab
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        loadUniversalDatabase(true);
-      }
-    };
-    const handleFocus = () => {
-      loadUniversalDatabase(true);
-    };
-
-    window.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      window.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [loadUniversalDatabase]);
-
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  // Flush all pending node position moves to server JSON file
-  const flushPendingPositions = useCallback(async () => {
-    const toSend = { ...pendingPositionsRef.current };
-    if (Object.keys(toSend).length === 0) {
-      setSyncStatus('synced');
-      return true;
-    }
-
-    setSyncStatus('saving');
-    try {
-      const res = await fetch('/api/database/positions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store',
-        },
-        body: JSON.stringify({ positions: toSend }),
-      }).catch(() => null);
-
-      if (res && res.ok) {
-        for (const k of Object.keys(toSend)) {
-          if (pendingPositionsRef.current[k] === toSend[k]) {
-            delete pendingPositionsRef.current[k];
-          }
-        }
-      }
-      setSyncStatus('synced');
-      return true;
-    } catch {
-      setSyncStatus('synced');
-      return true;
-    }
-  }, []);
-
-  // Guarantee all pending positions are sent when user closes tab
-  useEffect(() => {
-    const handleUnload = () => {
-      const pending = pendingPositionsRef.current;
-      if (Object.keys(pending).length > 0) {
-        const payload = JSON.stringify({ positions: pending });
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon('/api/database/positions-beacon', payload);
-        }
-      }
-    };
-
-    window.addEventListener('beforeunload', handleUnload);
-    window.addEventListener('pagehide', handleUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleUnload);
-      window.removeEventListener('pagehide', handleUnload);
-    };
-  }, []);
-
-  // Persist full database to local storage and server JSON
-  const persistUniversalDatabase = async (newDb: ScriptureDatabase) => {
-    try {
-      const formattedDb: ScriptureDatabase = {
-        ...newDb,
-        verses: newDb.verses.map((v) => {
-          const pos = newDb.node_positions?.[v.id];
-          return {
-            ...v,
-            x: pos ? Math.round(pos.x) : v.x ?? 0,
-            y: pos ? Math.round(pos.y) : v.y ?? 0,
-          };
-        }),
-      };
-
-      // 1. Immediately cache locally
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(formattedDb));
-
-      // 2. Backup to server if available
-      fetch('/api/database', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(formattedDb),
-      }).catch(() => {});
-
-      setSyncStatus('synced');
-      return true;
-    } catch (err) {
-      console.error('Error persisting database:', err);
-      showToast('Saved to browser storage');
-      return false;
-    }
-  };
-
   // Updating positions of node in UI directly updates the position value of that note in JSON
   const handleSaveNodePosition = (id: string, position: NodePosition) => {
-    pendingPositionsRef.current[id] = position;
-    setSyncStatus('saving');
+    const roundedPos = {
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+      fx: Math.round(position.x),
+      fy: Math.round(position.y),
+    };
 
     setDatabase((prev) => {
       const updatedPositions = {
         ...(prev.node_positions || {}),
-        [id]: position,
+        [id]: roundedPos,
       };
 
       // Directly update the coordinates inside the note/verse in the JSON
@@ -320,8 +230,8 @@ export default function App() {
         v.id === id
           ? {
               ...v,
-              x: Math.round(position.x),
-              y: Math.round(position.y),
+              x: roundedPos.x,
+              y: roundedPos.y,
             }
           : v
       );
@@ -332,38 +242,16 @@ export default function App() {
         node_positions: updatedPositions,
       };
 
-      lastLoadedChecksumRef.current = `${newDb.verses.length}-${newDb.edges.length}-${JSON.stringify(updatedPositions)}`;
-
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newDb));
-      } catch (e) {}
-
+      persistUniversalDatabase(newDb);
       return newDb;
     });
 
-    // Debounce network write to server positions endpoint
-    if (savePositionsDebounceRef.current) {
-      clearTimeout(savePositionsDebounceRef.current);
-    }
-    savePositionsDebounceRef.current = setTimeout(() => {
-      flushPendingPositions();
-    }, 150);
+    setSyncStatus('synced');
   };
 
   // Download the full database JSON with coordinates baked into every verse note
   const handleDownloadDatabaseJson = () => {
-    const formattedDb: ScriptureDatabase = {
-      ...database,
-      verses: database.verses.map((v) => {
-        const pos = database.node_positions?.[v.id];
-        return {
-          ...v,
-          x: pos ? Math.round(pos.x) : v.x ?? 0,
-          y: pos ? Math.round(pos.y) : v.y ?? 0,
-        };
-      }),
-      node_positions: database.node_positions,
-    };
+    const formattedDb: ScriptureDatabase = sanitizeScriptureDatabase(database) || database;
     const jsonStr = JSON.stringify(formattedDb, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -377,144 +265,175 @@ export default function App() {
     showToast('Downloaded database.json with coordinates');
   };
 
-  // Manual explicit save layout in JSON
-  const handleManualSaveLayout = async () => {
-    setSyncStatus('saving');
-    try {
-      const allPositions = database.node_positions || {};
-      const updatedVerses = database.verses.map((v) => {
-        const pos = allPositions[v.id];
-        return {
-          ...v,
-          x: pos ? Math.round(pos.x) : v.x ?? 0,
-          y: pos ? Math.round(pos.y) : v.y ?? 0,
-        };
-      });
+  // Import any universal database.json from user's computer
+  const handleImportDatabaseFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-      const updatedDb: ScriptureDatabase = {
-        ...database,
-        verses: updatedVerses,
-        node_positions: allPositions,
-      };
-
-      setDatabase(updatedDb);
+    const reader = new FileReader();
+    reader.onload = (event) => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedDb));
-      } catch {}
-
-      // Write to server JSON if available
-      await fetch('/api/database/positions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ positions: allPositions }),
-      }).catch(() => {});
-
-      pendingPositionsRef.current = {};
-      setSyncStatus('synced');
-      showToast('Coordinates updated in JSON!');
-    } catch {
-      setSyncStatus('synced');
-      showToast('Coordinates saved locally');
-    }
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        const sanitized = sanitizeScriptureDatabase(parsed);
+        if (sanitized && sanitized.verses.length > 0) {
+          setDatabase(sanitized);
+          persistUniversalDatabase(sanitized);
+          showToast(`Imported ${sanitized.verses.length} verses & ${sanitized.edges.length} links!`);
+        } else {
+          showToast('Invalid database.json format');
+        }
+      } catch {
+        showToast('Error reading database.json');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
-  const handleCommitBatch = async (
-    newVerses: Verse[],
-    newEdges: Edge[]
-  ) => {
-    const existingIds = new Set(database.verses.map((v) => v.id));
-    const freshVerses = newVerses.filter((v) => !existingIds.has(v.id));
+  // Manual explicit save layout in JSON
+  const handleManualSaveLayout = () => {
+    setDatabase((prev) => {
+      const formattedDb = sanitizeScriptureDatabase(prev) || prev;
+      persistUniversalDatabase(formattedDb);
+      return formattedDb;
+    });
+    showToast('Coordinates & connections saved in JSON!');
+  };
 
-    const edgeKey = (e: Edge) => `${e.from}::${e.to}`;
-    const existingEdgeKeys = new Set(database.edges.map(edgeKey));
-    const freshEdges = newEdges.filter((e) => !existingEdgeKeys.has(edgeKey(e)));
+  const handleCommitBatch = (newVerses: Verse[], newEdges: Edge[]) => {
+    setDatabase((prev) => {
+      const existingIds = new Set(prev.verses.map((v) => v.id));
+      const freshVerses = newVerses.filter((v) => !existingIds.has(v.id));
 
-    const newDb: ScriptureDatabase = {
-      ...database,
-      verses: [...database.verses, ...freshVerses],
-      edges: [...database.edges, ...freshEdges],
-    };
-    setDatabase(newDb);
-    await persistUniversalDatabase(newDb);
-    showToast(`Merged ${freshVerses.length} verses & ${freshEdges.length} connections to universal database.`);
+      const edgeKey = (e: Edge) => `${e.from}::${e.to}`;
+      const existingEdgeKeys = new Set(prev.edges.map(edgeKey));
+      const freshEdges = newEdges.filter((e) => !existingEdgeKeys.has(edgeKey(e)));
+
+      const updatedPositions = { ...(prev.node_positions || {}) };
+      freshVerses.forEach((v) => {
+        if (typeof v.x === 'number' && typeof v.y === 'number') {
+          updatedPositions[v.id] = {
+            x: Math.round(v.x),
+            y: Math.round(v.y),
+            fx: Math.round(v.x),
+            fy: Math.round(v.y),
+          };
+        }
+      });
+
+      const newDb: ScriptureDatabase = {
+        ...prev,
+        verses: [...prev.verses, ...freshVerses],
+        edges: [...prev.edges, ...freshEdges],
+        node_positions: updatedPositions,
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
+    showToast(`Merged verses & connections to universal JSON`);
   };
 
   // Direct manipulation connection created on canvas or modal
-  const handleAddEdge = async (edge: Edge) => {
-    const filtered = database.edges.filter((e) => !(e.from === edge.from && e.to === edge.to));
-    const newDb: ScriptureDatabase = {
-      ...database,
-      edges: [...filtered, edge],
-    };
-    setDatabase(newDb);
-    await persistUniversalDatabase(newDb);
+  const handleAddEdge = (edge: Edge) => {
+    setDatabase((prev) => {
+      const filtered = prev.edges.filter((e) => !(e.from === edge.from && e.to === edge.to));
+      const newDb: ScriptureDatabase = {
+        ...prev,
+        edges: [...filtered, edge],
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
     showToast(`Linked ${edge.from} → ${edge.to} (${edge.relation})`);
   };
 
-  const handleUpdateEdge = async (from: string, to: string, updatedWhy: string) => {
-    const newDb: ScriptureDatabase = {
-      ...database,
-      edges: database.edges.map((e) =>
-        e.from === from && e.to === to ? { ...e, why: updatedWhy } : e
-      ),
-    };
-    setDatabase(newDb);
-    await persistUniversalDatabase(newDb);
+  const handleUpdateEdge = (from: string, to: string, updatedWhy: string) => {
+    setDatabase((prev) => {
+      const newDb: ScriptureDatabase = {
+        ...prev,
+        edges: prev.edges.map((e) =>
+          e.from === from && e.to === to ? { ...e, why: updatedWhy } : e
+        ),
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
     showToast('Updated connection reasoning');
   };
 
-  const handleDeleteEdge = async (from: string, to: string) => {
-    const newDb: ScriptureDatabase = {
-      ...database,
-      edges: database.edges.filter((e) => !(e.from === from && e.to === to)),
-    };
-    setDatabase(newDb);
-    await persistUniversalDatabase(newDb);
+  const handleDeleteEdge = (from: string, to: string) => {
+    setDatabase((prev) => {
+      const newDb: ScriptureDatabase = {
+        ...prev,
+        edges: prev.edges.filter((e) => !(e.from === from && e.to === to)),
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
     showToast(`Removed link ${from} → ${to}`);
   };
 
-  const handleAddVerse = async (verse: Verse) => {
-    const withoutDuplicate = database.verses.filter((v) => v.id !== verse.id);
-    const newDb: ScriptureDatabase = {
-      ...database,
-      verses: [...withoutDuplicate, verse],
-    };
-    setDatabase(newDb);
-    await persistUniversalDatabase(newDb);
+  const handleAddVerse = (verse: Verse) => {
+    setDatabase((prev) => {
+      const withoutDuplicate = prev.verses.filter((v) => v.id !== verse.id);
+      const posX = typeof verse.x === 'number' ? Math.round(verse.x) : 0;
+      const posY = typeof verse.y === 'number' ? Math.round(verse.y) : 0;
+      const verseWithPos = { ...verse, x: posX, y: posY };
+
+      const updatedPositions = {
+        ...(prev.node_positions || {}),
+        [verse.id]: { x: posX, y: posY, fx: posX, fy: posY },
+      };
+
+      const newDb: ScriptureDatabase = {
+        ...prev,
+        verses: [...withoutDuplicate, verseWithPos],
+        node_positions: updatedPositions,
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
     showToast(`Added ${verse.id} to universal database`);
   };
 
-  const handleDeleteVerse = async (verseId: string) => {
-    const updatedPositions = { ...(database.node_positions || {}) };
-    delete updatedPositions[verseId];
-    const newDb: ScriptureDatabase = {
-      ...database,
-      verses: database.verses.filter((v) => v.id !== verseId),
-      edges: database.edges.filter((e) => e.from !== verseId && e.to !== verseId),
-      node_positions: updatedPositions,
-    };
-    setDatabase(newDb);
-    await persistUniversalDatabase(newDb);
+  const handleDeleteVerse = (verseId: string) => {
+    setDatabase((prev) => {
+      const remainingVerses = prev.verses.filter((v) => v.id !== verseId);
+      const remainingEdges = prev.edges.filter((e) => e.from !== verseId && e.to !== verseId);
+      const updatedPositions = { ...(prev.node_positions || {}) };
+      delete updatedPositions[verseId];
+
+      const newDb: ScriptureDatabase = {
+        ...prev,
+        verses: remainingVerses,
+        edges: remainingEdges,
+        node_positions: updatedPositions,
+      };
+      persistUniversalDatabase(newDb);
+      return newDb;
+    });
+    setSelectedVerse(null);
     showToast(`Deleted ${verseId} from universal database`);
   };
 
   const handleResetDatabase = () => {
-    fetch('/api/database/reset', { method: 'POST' })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.database) {
-          setDatabase(data.database);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(data.database));
-          showToast('Reset universal database to initial seed scripture database');
-        }
-      })
-      .catch(() => {
-        setDatabase(INITIAL_SCRIPTURE_DB);
-        persistUniversalDatabase(INITIAL_SCRIPTURE_DB);
-        showToast('Reset constellation to initial seed scripture database');
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+
+    const seed = sanitizeScriptureDatabase(INITIAL_SCRIPTURE_DB) || INITIAL_SCRIPTURE_DB;
+    setDatabase(seed);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
+    } catch {}
+
+    if (hasBackendServerRef.current !== false) {
+      fetch('/api/database/reset', { method: 'POST' }).catch(() => {
+        hasBackendServerRef.current = false;
       });
+    }
+    showToast('Reset constellation to initial seed scripture database');
   };
 
   const handleLogout = () => {
@@ -555,9 +474,18 @@ export default function App() {
           मनाचे श्लोक · दासबोध
         </h1>
         <p className="text-[10px] text-stone-500 font-mono tracking-widest uppercase">
-          Scripture Constellation · {database.verses.length} verses
+          Scripture Constellation · {database.verses.length} verses · {database.edges.length} links
         </p>
       </div>
+
+      {/* Hidden File Input for Importing database.json */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        onChange={handleImportDatabaseFile}
+        className="hidden"
+      />
 
       {/* TOP RIGHT CONTROLS: Small Curator Mode Toggle + Menu Button */}
       <div className="absolute top-5 right-6 z-30 flex items-center gap-2">
@@ -619,6 +547,17 @@ export default function App() {
               <span className="hidden sm:inline">Save in JSON</span>
             </>
           )}
+        </button>
+
+        {/* Import JSON Button */}
+        <button
+          id="btn-import-json"
+          onClick={() => fileInputRef.current?.click()}
+          className="h-9 px-3 rounded-full flex items-center gap-1.5 text-xs font-mono transition-all border backdrop-blur-md active:scale-95 bg-white/5 hover:bg-white/10 border-white/10 text-stone-300 hover:text-white"
+          title="Import database.json file from your computer"
+        >
+          <Upload className="w-3.5 h-3.5 text-sky-400" />
+          <span className="hidden lg:inline">Import JSON</span>
         </button>
 
         {/* Download JSON Button */}
@@ -816,6 +755,21 @@ export default function App() {
                   <span>Download database.json</span>
                 </span>
                 <span className="font-mono text-[10px] text-stone-500">Export</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  fileInputRef.current?.click();
+                  setIsMenuOpen(false);
+                }}
+                className="w-full px-2.5 py-1.5 hover:bg-white/5 rounded-lg flex items-center justify-between text-stone-300 hover:text-white transition-colors"
+                title="Import database.json file from your computer"
+              >
+                <span className="flex items-center gap-2">
+                  <Upload className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Import database.json</span>
+                </span>
+                <span className="font-mono text-[10px] text-stone-500">Import</span>
               </button>
 
               <button
