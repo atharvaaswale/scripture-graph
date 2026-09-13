@@ -33,13 +33,48 @@ export interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
   why: string;
 }
 
-// Sophisticated celestial themes
+// Sophisticated celestial themes (rich classical library + dynamic custom fallback)
 export const SCRIPTURE_THEMES: Record<string, { core: string; halo: string; label: string }> = {
   MS: { core: '#f43f5e', halo: 'rgba(244, 63, 94, 0.3)', label: 'Manache Shlok' },
   DB: { core: '#f59e0b', halo: 'rgba(245, 158, 11, 0.3)', label: 'Dasbodh' },
   BG: { core: '#818cf8', halo: 'rgba(129, 140, 248, 0.3)', label: 'Bhagavad Gita' },
   BP: { core: '#eab308', halo: 'rgba(234, 179, 8, 0.3)', label: 'Bhagavata' },
+  JN: { core: '#06b6d4', halo: 'rgba(6, 182, 212, 0.3)', label: 'Jnaneshwari' },
+  AG: { core: '#a855f7', halo: 'rgba(168, 85, 247, 0.3)', label: 'Ashtavakra Gita' },
+  UP: { core: '#10b981', halo: 'rgba(16, 185, 129, 0.3)', label: 'Upanishads' },
+  TG: { core: '#ec4899', halo: 'rgba(236, 72, 153, 0.3)', label: 'Tukaram Gatha' },
+  YV: { core: '#38bdf8', halo: 'rgba(56, 189, 248, 0.3)', label: 'Yoga Vasistha' },
+  VC: { core: '#14b8a6', halo: 'rgba(20, 184, 166, 0.3)', label: 'Vivekachudamani' },
+  AM: { core: '#fb923c', halo: 'rgba(251, 146, 60, 0.3)', label: 'Amritanubhava' },
+  EB: { core: '#a3e635', halo: 'rgba(163, 230, 53, 0.3)', label: 'Eknathi Bhagavata' },
+  VR: { core: '#facc15', halo: 'rgba(250, 204, 21, 0.3)', label: 'Valmiki Ramayana' },
+  MB: { core: '#6366f1', halo: 'rgba(99, 102, 241, 0.3)', label: 'Mahabharata' },
 };
+
+export function getScriptureTheme(code: string, label?: string): { core: string; halo: string; label: string } {
+  if (SCRIPTURE_THEMES[code]) {
+    return SCRIPTURE_THEMES[code];
+  }
+  const fallbackColors = [
+    { core: '#06b6d4', halo: 'rgba(6, 182, 212, 0.3)' },
+    { core: '#a855f7', halo: 'rgba(168, 85, 247, 0.3)' },
+    { core: '#10b981', halo: 'rgba(16, 185, 129, 0.3)' },
+    { core: '#ec4899', halo: 'rgba(236, 72, 153, 0.3)' },
+    { core: '#38bdf8', halo: 'rgba(56, 189, 248, 0.3)' },
+    { core: '#fb923c', halo: 'rgba(251, 146, 60, 0.3)' },
+    { core: '#14b8a6', halo: 'rgba(20, 184, 166, 0.3)' },
+    { core: '#a3e635', halo: 'rgba(163, 230, 53, 0.3)' },
+  ];
+  let hash = 0;
+  for (let i = 0; i < code.length; i++) {
+    hash = (hash << 5) - hash + code.charCodeAt(i);
+  }
+  const idx = Math.abs(hash) % fallbackColors.length;
+  return {
+    ...fallbackColors[idx],
+    label: label || code,
+  };
+}
 
 // Relation curves & colors matching the user screenshot
 export const RELATION_STYLES: Record<
@@ -106,8 +141,10 @@ export function getNodeSphereStyle(verse: Verse, isSelected: boolean) {
     };
   }
 
+  const sc = verse.scripture;
+
   // Manache Shlok (MS-178, MS-179): Soft pink pearl sphere
-  if (verse.scripture === 'MS') {
+  if (sc === 'MS') {
     return {
       gradientId: 'sphere-ms-rose',
       haloId: 'halo-ms-rose',
@@ -119,7 +156,7 @@ export function getNodeSphereStyle(verse: Verse, isSelected: boolean) {
   }
 
   // Dasbodh (DB-5.1.40, DB-4.4.5, DB-6.2.13): Warm golden amber sphere
-  if (verse.scripture === 'DB') {
+  if (sc === 'DB') {
     return {
       gradientId: 'sphere-db-amber',
       haloId: 'halo-db-amber',
@@ -131,7 +168,7 @@ export function getNodeSphereStyle(verse: Verse, isSelected: boolean) {
   }
 
   // Bhagavad Gita (BG): Celestial indigo sphere
-  if (verse.scripture === 'BG') {
+  if (sc === 'BG') {
     return {
       gradientId: 'sphere-bg-indigo',
       haloId: 'halo-bg-indigo',
@@ -143,10 +180,59 @@ export function getNodeSphereStyle(verse: Verse, isSelected: boolean) {
   }
 
   // Bhagavata (BP): Subtle gold sphere
+  if (sc === 'BP') {
+    return {
+      gradientId: 'sphere-bp-gold',
+      haloId: 'halo-bp-gold',
+      ringColor: '#eab308',
+      ringWidth: 1.5,
+      textColor: '#1c1917',
+      radius: 20,
+    };
+  }
+
+  // Jnaneshwari (JN): Radiant cyan sapphire sphere
+  if (sc === 'JN') {
+    return {
+      gradientId: 'sphere-jn-cyan',
+      haloId: 'halo-jn-cyan',
+      ringColor: '#06b6d4',
+      ringWidth: 1.5,
+      textColor: '#083344',
+      radius: 20,
+    };
+  }
+
+  // Ashtavakra Gita (AG): Luminous royal amethyst sphere
+  if (sc === 'AG') {
+    return {
+      gradientId: 'sphere-ag-purple',
+      haloId: 'halo-ag-purple',
+      ringColor: '#a855f7',
+      ringWidth: 1.5,
+      textColor: '#3b0764',
+      radius: 20,
+    };
+  }
+
+  // Upanishads (UP): Deep Vedic jade sphere
+  if (sc === 'UP') {
+    return {
+      gradientId: 'sphere-up-emerald',
+      haloId: 'halo-up-emerald',
+      ringColor: '#10b981',
+      ringWidth: 1.5,
+      textColor: '#064e3b',
+      radius: 20,
+    };
+  }
+
+  // Dynamic fallback for any other custom scripture:
+  const theme = getScriptureTheme(sc);
   return {
     gradientId: 'sphere-bp-gold',
     haloId: 'halo-bp-gold',
-    ringColor: '#eab308',
+    ringColor: theme.core,
     ringWidth: 1.5,
     textColor: '#1c1917',
     radius: 20,
@@ -259,16 +345,11 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Zero-lag direct DOM update for mask circle & cursor tracker
+    // Zero-lag direct DOM update for mask circle
     const maskCircle = document.getElementById('spotlight-mask-circle');
     if (maskCircle) {
       maskCircle.setAttribute('cx', String(x));
       maskCircle.setAttribute('cy', String(y));
-    }
-    const tracker = document.getElementById('starlight-cursor-tracker');
-    if (tracker) {
-      tracker.setAttribute('transform', `translate(${x}, ${y})`);
-      tracker.setAttribute('opacity', '1');
     }
 
     setPointerPos({
@@ -279,10 +360,6 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
   }, []);
 
   const handlePointerLeave = useCallback(() => {
-    const tracker = document.getElementById('starlight-cursor-tracker');
-    if (tracker) {
-      tracker.setAttribute('opacity', '0.45');
-    }
     setPointerPos((prev) => ({ ...prev, visible: false }));
   }, []);
 
@@ -335,21 +412,21 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       .attr('fill', '#384152')
       .attr('opacity', 0.65);
 
-    // B. Warm Starlight-Gold Dots (Illuminated dots under cursor spotlight)
-    const goldPattern = defs
+    // B. Soft Whitish Star Dots (Illuminated dots under cursor spotlight - 50% softer, pure whitish)
+    const highlightPattern = defs
       .append('pattern')
-      .attr('id', 'static-gold-dots')
+      .attr('id', 'static-highlight-dots')
       .attr('width', 10)
       .attr('height', 10)
       .attr('patternUnits', 'userSpaceOnUse');
 
-    goldPattern
+    highlightPattern
       .append('circle')
       .attr('cx', 5)
       .attr('cy', 5)
-      .attr('r', 1.25)
-      .attr('fill', '#fde047')
-      .attr('opacity', 0.95);
+      .attr('r', 1.05)
+      .attr('fill', '#ffffff')
+      .attr('opacity', 0.45);
 
     // C. Radial Gradient for Cursor Spotlight Mask (within defined 80px radius)
     const spotlightGrad = defs
@@ -359,9 +436,9 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       .attr('cy', '50%')
       .attr('r', '50%');
 
-    spotlightGrad.append('stop').attr('offset', '0%').attr('stop-color', '#ffffff').attr('stop-opacity', 1);
-    spotlightGrad.append('stop').attr('offset', '45%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.88);
-    spotlightGrad.append('stop').attr('offset', '75%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.3);
+    spotlightGrad.append('stop').attr('offset', '0%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.5);
+    spotlightGrad.append('stop').attr('offset', '45%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.38);
+    spotlightGrad.append('stop').attr('offset', '75%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.14);
     spotlightGrad.append('stop').attr('offset', '100%').attr('stop-color', '#ffffff').attr('stop-opacity', 0);
 
     // D. Cursor Spotlight Mask (Reveals gold dots within 80px of cursor; void stays dark)
@@ -524,6 +601,72 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     haloBpGold.append('stop').attr('offset', '50%').attr('stop-color', '#eab308').attr('stop-opacity', 0.22);
     haloBpGold.append('stop').attr('offset', '100%').attr('stop-color', '#854d0e').attr('stop-opacity', 0);
 
+    // G. JN Cyan: Radiant cyan sapphire sphere
+    const gradJnCyan = defs
+      .append('radialGradient')
+      .attr('id', 'sphere-jn-cyan')
+      .attr('cx', '34%')
+      .attr('cy', '30%')
+      .attr('r', '66%');
+    gradJnCyan.append('stop').attr('offset', '0%').attr('stop-color', '#ecfeff');
+    gradJnCyan.append('stop').attr('offset', '35%').attr('stop-color', '#a5f3fc');
+    gradJnCyan.append('stop').attr('offset', '75%').attr('stop-color', '#06b6d4');
+    gradJnCyan.append('stop').attr('offset', '100%').attr('stop-color', '#0e7490');
+
+    const haloJnCyan = defs
+      .append('radialGradient')
+      .attr('id', 'halo-jn-cyan')
+      .attr('cx', '50%')
+      .attr('cy', '50%')
+      .attr('r', '50%');
+    haloJnCyan.append('stop').attr('offset', '0%').attr('stop-color', '#a5f3fc').attr('stop-opacity', 0.5);
+    haloJnCyan.append('stop').attr('offset', '50%').attr('stop-color', '#06b6d4').attr('stop-opacity', 0.22);
+    haloJnCyan.append('stop').attr('offset', '100%').attr('stop-color', '#0e7490').attr('stop-opacity', 0);
+
+    // H. AG Purple: Luminous royal amethyst sphere
+    const gradAgPurple = defs
+      .append('radialGradient')
+      .attr('id', 'sphere-ag-purple')
+      .attr('cx', '34%')
+      .attr('cy', '30%')
+      .attr('r', '66%');
+    gradAgPurple.append('stop').attr('offset', '0%').attr('stop-color', '#faf5ff');
+    gradAgPurple.append('stop').attr('offset', '35%').attr('stop-color', '#e9d5ff');
+    gradAgPurple.append('stop').attr('offset', '75%').attr('stop-color', '#a855f7');
+    gradAgPurple.append('stop').attr('offset', '100%').attr('stop-color', '#6b21a8');
+
+    const haloAgPurple = defs
+      .append('radialGradient')
+      .attr('id', 'halo-ag-purple')
+      .attr('cx', '50%')
+      .attr('cy', '50%')
+      .attr('r', '50%');
+    haloAgPurple.append('stop').attr('offset', '0%').attr('stop-color', '#e9d5ff').attr('stop-opacity', 0.5);
+    haloAgPurple.append('stop').attr('offset', '50%').attr('stop-color', '#a855f7').attr('stop-opacity', 0.22);
+    haloAgPurple.append('stop').attr('offset', '100%').attr('stop-color', '#6b21a8').attr('stop-opacity', 0);
+
+    // I. UP Emerald: Deep Vedic jade sphere
+    const gradUpEmerald = defs
+      .append('radialGradient')
+      .attr('id', 'sphere-up-emerald')
+      .attr('cx', '34%')
+      .attr('cy', '30%')
+      .attr('r', '66%');
+    gradUpEmerald.append('stop').attr('offset', '0%').attr('stop-color', '#f0fdf4');
+    gradUpEmerald.append('stop').attr('offset', '35%').attr('stop-color', '#bbf7d0');
+    gradUpEmerald.append('stop').attr('offset', '75%').attr('stop-color', '#10b981');
+    gradUpEmerald.append('stop').attr('offset', '100%').attr('stop-color', '#047857');
+
+    const haloUpEmerald = defs
+      .append('radialGradient')
+      .attr('id', 'halo-up-emerald')
+      .attr('cx', '50%')
+      .attr('cy', '50%')
+      .attr('r', '50%');
+    haloUpEmerald.append('stop').attr('offset', '0%').attr('stop-color', '#bbf7d0').attr('stop-opacity', 0.5);
+    haloUpEmerald.append('stop').attr('offset', '50%').attr('stop-color', '#10b981').attr('stop-opacity', 0.22);
+    haloUpEmerald.append('stop').attr('offset', '100%').attr('stop-color', '#047857').attr('stop-opacity', 0);
+
     // --- 4. SHARP TRIANGULAR ARROWHEADS (Docking right at the node sphere edge) ---
     ALL_RELATIONS.forEach((rel) => {
       const style = RELATION_STYLES[rel];
@@ -559,23 +702,23 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
       .attr('height', '100%')
       .attr('fill', 'url(#static-dim-dots)');
 
-    // 3. Cursor spotlight: illuminated warm starlight-gold dots within radius 80px (void stays dark on desktop)
+    // 3. Cursor spotlight: illuminated subtle whitish dots within radius 80px (soft 50% contrast)
     const isMobileDevice =
       typeof window !== 'undefined' &&
       (window.innerWidth < 768 ||
         window.matchMedia('(pointer: coarse)').matches ||
         window.matchMedia('(hover: none)').matches);
 
-    const goldSpotlight = svg
+    const whiteSpotlight = svg
       .append('rect')
-      .attr('class', 'static-gold-dots-spotlight pointer-events-none')
+      .attr('class', 'static-highlight-dots-spotlight pointer-events-none')
       .attr('width', '100%')
       .attr('height', '100%')
-      .attr('fill', 'url(#static-gold-dots)')
+      .attr('fill', 'url(#static-highlight-dots)')
       .attr('mask', 'url(#cursor-spotlight-mask)');
 
     if (isMobileDevice) {
-      goldSpotlight.style('display', 'none');
+      whiteSpotlight.style('display', 'none');
     }
 
     // Main transformed world group
@@ -1058,43 +1201,6 @@ export const GraphVisualization: React.FC<GraphVisualizationProps> = ({
     simulation.tick();
     link.attr('d', getCurvedPath);
     node.attr('transform', (d) => `translate(${d.x},${d.y})`);
-
-    // --- 6. SOFT STARLIGHT-GOLD CURSOR TRACKER (SCREEN-SPACE, DESKTOP ONLY) ---
-    const cursorTracker = svg
-      .append('g')
-      .attr('id', 'starlight-cursor-tracker')
-      .attr('class', 'pointer-events-none')
-      .attr('transform', `translate(${initialCursorX}, ${initialCursorY})`)
-      .attr('opacity', pointerPos.visible ? 1 : 0.85);
-
-    if (isMobileDevice) {
-      cursorTracker.style('display', 'none');
-    }
-
-    // Subtle outer starlight ring (contrasting ring around the pointer)
-    cursorTracker
-      .append('circle')
-      .attr('r', 13)
-      .attr('fill', 'none')
-      .attr('stroke', '#fde047')
-      .attr('stroke-width', 0.8)
-      .attr('stroke-opacity', 0.4)
-      .attr('stroke-dasharray', '2,2');
-
-    // Focused warm gold aura
-    cursorTracker
-      .append('circle')
-      .attr('r', 5.5)
-      .attr('fill', 'rgba(253, 224, 71, 0.22)')
-      .attr('stroke', '#fde047')
-      .attr('stroke-width', 1)
-      .attr('stroke-opacity', 0.85);
-
-    // Precise starlight-gold center pointer
-    cursorTracker
-      .append('circle')
-      .attr('r', 2)
-      .attr('fill', '#ffffff');
 
     return () => {
       simulation.stop();

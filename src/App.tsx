@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { INITIAL_SCRIPTURE_DB } from './data/initialData';
-import { ScriptureDatabase, Verse, Edge, NodePosition } from './types';
-import { GraphVisualization, SCRIPTURE_THEMES } from './components/GraphVisualization';
+import { ScriptureDatabase, Verse, Edge, NodePosition, ScriptureDef } from './types';
+import { GraphVisualization, SCRIPTURE_THEMES, getScriptureTheme } from './components/GraphVisualization';
 import { VerseCatalog } from './components/VerseCatalog';
 import { VerseDetailsModal } from './components/VerseDetailsModal';
 import { BatchProposerModal } from './components/BatchProposerModal';
@@ -53,8 +53,14 @@ function sanitizeScriptureDatabase(raw: any): ScriptureDatabase | null {
     };
   });
 
+  const mergedScriptures = {
+    ...INITIAL_SCRIPTURE_DB.scriptures,
+    ...(raw.scriptures || raw.scripture_definitions || {}),
+  };
+
   return {
     ...raw,
+    scriptures: mergedScriptures,
     verses: sanitizedVerses,
     edges: raw.edges,
     node_positions: positions,
@@ -102,9 +108,9 @@ export default function App() {
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
 
-  // Scripture Filters
+  // Scripture Filters: default to all known scriptures active
   const [activeScriptures, setActiveScriptures] = useState<Set<string>>(
-    new Set(['MS', 'DB', 'BG', 'BP'])
+    () => new Set(Object.keys(INITIAL_SCRIPTURE_DB.scriptures || { MS: 1, DB: 1, BG: 1, BP: 1 }))
   );
 
   // Curator Mode vs Move Mode toggle
@@ -397,6 +403,27 @@ export default function App() {
     showToast(`Added ${verse.id} to universal database`);
   };
 
+  // Add new scripture to universal database
+  const handleAddScripture = useCallback(
+    (code: string, def: ScriptureDef) => {
+      const cleanCode = code.trim().toUpperCase();
+      setDatabase((prev) => {
+        const updatedDb: ScriptureDatabase = {
+          ...prev,
+          scriptures: {
+            ...prev.scriptures,
+            [cleanCode]: def,
+          },
+        };
+        persistUniversalDatabase(updatedDb);
+        return updatedDb;
+      });
+      setActiveScriptures((prev) => new Set([...prev, cleanCode]));
+      showToast(`Added scripture ${cleanCode} (${def.full_name})`);
+    },
+    [persistUniversalDatabase, showToast]
+  );
+
   const handleDeleteVerse = (verseId: string) => {
     setDatabase((prev) => {
       const remainingVerses = prev.verses.filter((v) => v.id !== verseId);
@@ -629,11 +656,25 @@ export default function App() {
 
             {/* Scripture Filters */}
             <div className="space-y-1.5">
-              <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400">
-                Scripture Glow:
-              </span>
-              <div className="grid grid-cols-2 gap-1.5">
-                {Object.entries(SCRIPTURE_THEMES).map(([code, theme]) => {
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400">
+                  Scripture Glow:
+                </span>
+                <button
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsManualVerseOpen(true);
+                  }}
+                  className="text-[10px] font-mono text-amber-400 hover:text-amber-300 flex items-center gap-1 hover:underline"
+                  title="Add more scriptures"
+                >
+                  <Plus className="w-2.5 h-2.5" />
+                  <span>Add More</span>
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 max-h-44 overflow-y-auto pr-1">
+                {Object.entries(database.scriptures || {}).map(([code, def]) => {
+                  const theme = getScriptureTheme(code, (def as ScriptureDef)?.full_name);
                   const isActive = activeScriptures.has(code);
                   return (
                     <button
@@ -644,12 +685,13 @@ export default function App() {
                           ? 'bg-white/10 border-white/10 text-stone-200'
                           : 'bg-white/[0.02] border-white/5 text-stone-500'
                       }`}
+                      title={(def as ScriptureDef)?.full_name || code}
                     >
                       <span
-                        className="w-2 h-2 rounded-full"
+                        className="w-2 h-2 rounded-full shrink-0"
                         style={{ backgroundColor: theme.core }}
                       />
-                      <span>{code}</span>
+                      <span className="truncate">{code}</span>
                     </button>
                   );
                 })}
@@ -874,6 +916,7 @@ export default function App() {
         isOpen={isManualVerseOpen}
         onClose={() => setIsManualVerseOpen(false)}
         onAddVerse={handleAddVerse}
+        onAddScripture={handleAddScripture}
       />
 
       {/* MODAL 3: BATCH INGESTION & SCHOLAR AI PROPOSER */}

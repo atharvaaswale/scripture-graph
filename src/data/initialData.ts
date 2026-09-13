@@ -47,6 +47,98 @@ export const INITIAL_SCRIPTURE_DB: ScriptureDatabase = {
         "adhyaya",
         "shloka"
       ]
+    },
+    "JN": {
+      "full_name": "Jnaneshwari (Bhavartha Dipika)",
+      "author": "Sant Dnyaneshwar",
+      "language": "Marathi",
+      "locator_fields": [
+        "adhyaya",
+        "ovi"
+      ]
+    },
+    "AG": {
+      "full_name": "Ashtavakra Gita",
+      "author": "Sage Ashtavakra",
+      "language": "Sanskrit",
+      "locator_fields": [
+        "chapter",
+        "verse"
+      ]
+    },
+    "UP": {
+      "full_name": "Upanishads",
+      "author": "Vedic Rishis",
+      "language": "Sanskrit",
+      "locator_fields": [
+        "upanishad",
+        "khanda",
+        "mantra"
+      ]
+    },
+    "TG": {
+      "full_name": "Tukaram Gatha",
+      "author": "Sant Tukaram",
+      "language": "Marathi",
+      "locator_fields": [
+        "abhanga"
+      ]
+    },
+    "YV": {
+      "full_name": "Yoga Vasistha",
+      "author": "Sage Valmiki",
+      "language": "Sanskrit",
+      "locator_fields": [
+        "prakarana",
+        "sarga",
+        "shloka"
+      ]
+    },
+    "VC": {
+      "full_name": "Vivekachudamani",
+      "author": "Adi Shankaracharya",
+      "language": "Sanskrit",
+      "locator_fields": [
+        "shloka"
+      ]
+    },
+    "AM": {
+      "full_name": "Amritanubhava",
+      "author": "Sant Dnyaneshwar",
+      "language": "Marathi",
+      "locator_fields": [
+        "prakarana",
+        "ovi"
+      ]
+    },
+    "EB": {
+      "full_name": "Eknathi Bhagavata",
+      "author": "Sant Eknath",
+      "language": "Marathi",
+      "locator_fields": [
+        "adhyaya",
+        "ovi"
+      ]
+    },
+    "VR": {
+      "full_name": "Valmiki Ramayana",
+      "author": "Sage Valmiki",
+      "language": "Sanskrit",
+      "locator_fields": [
+        "kanda",
+        "sarga",
+        "shloka"
+      ]
+    },
+    "MB": {
+      "full_name": "Mahabharata",
+      "author": "Sage Vyasa",
+      "language": "Sanskrit",
+      "locator_fields": [
+        "parva",
+        "adhyaya",
+        "shloka"
+      ]
     }
   },
   "verses": [
